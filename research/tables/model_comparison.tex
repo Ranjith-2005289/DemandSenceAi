@@ -1,0 +1,23 @@
+\begin{table*}[!t]
+\caption{Full Model Leaderboard on the Evaluation Dataset (366 Daily Observations), Ranked by Composite Score $S$ (Eq.~\eqref{eq:composite-score})}
+\label{tab:model-comparison}
+\centering
+\begin{tabular}{@{}clrrrrrrr@{}}
+\toprule
+\textbf{Rank} & \textbf{Model} & \textbf{Score $S$} & \textbf{RMSE} & \textbf{MAE} & \textbf{MAPE} & \textbf{$R^2$} & \textbf{Train (s)} & \textbf{Predict (s)} \\
+\midrule
+1  & KNN                  & 0.7983 & 1162.41 & 907.53 & 3.002 & $-0.078$ & 0.0001 & 0.2010 \\
+2  & SVM                  & 0.8036 & 1125.86 & 894.23 & 3.213 & $\phantom{-}0.003$ & 0.0016 & 0.0006 \\
+3  & Exponential Smoothing & 0.8221 & 1129.37 & 882.53 & 3.368 & $-0.011$ & 0.0014 & 0.0006 \\
+4  & Moving Average       & 0.8261 & 1158.52 & 897.45 & 3.400 & $-0.062$ & 0.0000 & 0.0004 \\
+5  & Croston--SBA         & 0.8271 & 1141.70 & 891.96 & 3.349 & $-0.036$ & 0.0002 & 0.0000 \\
+6  & Holt--Winters        & 0.8387 & 1144.76 & 902.69 & 3.397 & $-0.040$ & 0.1764 & 0.0043 \\
+7  & Prophet              & 0.8608 & 1215.07 & 923.64 & 2.944 & $-0.168$ & 0.3744 & 0.0080 \\
+8  & SARIMA               & 0.8780 & 1149.83 & 900.94 & 3.377 & $-0.048$ & 0.1107 & 1.1075 \\
+9  & XGBoost              & 0.9460 & 1109.45 & 865.96 & 3.246 & $\phantom{-}0.026$ & 1.9747 & 0.0081 \\
+10 & SARIMAX              & 0.9966 & 1325.73 & 1020.74 & 3.251 & $-0.413$ & 0.2205 & 1.0920 \\
+11 & ARIMA                & 1.0161 & 1130.18 & 894.03 & 3.517 & $-0.014$ & 0.1052 & 4.1640 \\
+12 & Random Forest        & 1.0810 & 1224.23 & 965.23 & 3.995 & $-0.221$ & 1.8084 & 0.3019 \\
+\bottomrule
+\end{tabular}
+\end{table*}

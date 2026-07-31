@@ -1,0 +1,25 @@
+% Real feature-importance bar chart (XGBoost, evaluation dataset, Section VI)
+\begin{figure}[!t]
+\centering
+\begin{tikzpicture}[scale=1]
+\foreach \name/\val [count=\i from 0] in {
+    roll\_max\_14/0.0964,
+    ewm\_7/0.0711,
+    cos\_month/0.0682,
+    lag\_21/0.0605,
+    month/0.0600,
+    lag\_1/0.0543,
+    roll\_max\_7/0.0514,
+    lag\_28/0.0505
+} {
+    \pgfmathsetmacro{\ypos}{-0.5*\i}
+    \pgfmathsetmacro{\barlen}{\val*40}
+    \node[anchor=east, font=\scriptsize] at (-0.15,\ypos) {\texttt{\name}};
+    \draw[fill=blue!35, draw=blue!60] (0,\ypos-0.15) rectangle (\barlen/10,\ypos+0.15);
+    \node[anchor=west, font=\tiny] at (\barlen/10+0.05,\ypos) {\val};
+}
+\draw[-{Latex[length=2mm]}] (0,-4.1) -- (4.2,-4.1) node[right, font=\tiny]{gain-based importance};
+\end{tikzpicture}
+\caption{Top eight gain-based feature importances from the XGBoost model fit on the evaluation dataset of Section~\ref{sec:dataset} (real values reported by the trained model, not illustrative data). Calendar features (\texttt{cos\_month}, \texttt{month}) and short/medium-range history (\texttt{lag\_1}, \texttt{lag\_21}, \texttt{lag\_28}, rolling maxima) dominate, consistent with the absence of strong exogenous signal in this particular dataset.}
+\label{fig:feature-importance}
+\end{figure}

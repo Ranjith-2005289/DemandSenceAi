@@ -1,0 +1,25 @@
+% Deployment architecture diagram
+\begin{figure}[!t]
+\centering
+\begin{tikzpicture}[
+    node distance=0.5cm and 0.6cm,
+    box/.style={rectangle, rounded corners, draw=black, thick, minimum width=2.7cm, minimum height=0.8cm, align=center, font=\scriptsize, fill=blue!8},
+    ext/.style={rectangle, rounded corners, draw=black, thick, minimum width=2.7cm, minimum height=0.8cm, align=center, font=\scriptsize, fill=red!8, dashed},
+    arrow/.style={-{Latex[length=2mm]}, thick}
+]
+
+\node[box] (browser) {Client browser};
+\node[box, below=of browser] (vite) {Vite-served React\\static bundle};
+\node[box, below=of vite] (uvicorn) {Uvicorn ASGI process\\(FastAPI application)};
+\node[ext, right=1.1cm of uvicorn] (llm) {Gemini API\\(chat / embeddings)};
+\node[box, below=of uvicorn] (disk) {Local disk:\\uploads, processed,\\session\_data, ChromaDB};
+
+\draw[arrow] (browser) -- (vite);
+\draw[arrow] (browser) -- (uvicorn);
+\draw[arrow] (uvicorn) -- (disk);
+\draw[arrow] (uvicorn) -- (llm);
+
+\end{tikzpicture}
+\caption{Deployment architecture. The frontend and backend are independently deployable processes; CORS origins and the frontend's backend base URL are environment-configured. The only external network dependency is the large-language-model API used by the explanation layer; core forecasting functions without it.}
+\label{fig:deployment}
+\end{figure}

@@ -1,0 +1,29 @@
+% RMSE comparison bar chart (real values from Table IV / model_comparison.tex)
+\begin{figure}[!t]
+\centering
+\begin{tikzpicture}[scale=1]
+\foreach \name/\val [count=\i from 0] in {
+    XGBoost/1109.45,
+    SVM/1125.86,
+    Ex.Smooth/1129.37,
+    ARIMA/1130.18,
+    CrostonSBA/1141.70,
+    Holt-Winters/1144.76,
+    SARIMA/1149.83,
+    Moving Avg/1158.52,
+    KNN/1162.41,
+    Prophet/1215.07,
+    RandomForest/1224.23,
+    SARIMAX/1325.73
+} {
+    \pgfmathsetmacro{\ypos}{-0.4*\i}
+    \pgfmathsetmacro{\barlen}{(\val-1050)/40}
+    \node[anchor=east, font=\tiny] at (-0.15,\ypos) {\name};
+    \draw[fill=orange!35, draw=orange!60] (0,\ypos-0.13) rectangle (\barlen,\ypos+0.13);
+    \node[anchor=west, font=\tiny] at (\barlen+0.05,\ypos) {\pgfmathprintnumber[fixed,precision=0]{\val}};
+}
+\draw[-{Latex[length=2mm]}] (0,-5.1) -- (7.2,-5.1) node[right, font=\tiny]{RMSE};
+\end{tikzpicture}
+\caption{Cross-validated RMSE (Eq.~\eqref{eq:rmse}) across all twelve successfully trained models on the evaluation dataset, sorted ascending. Note that XGBoost attains the lowest raw RMSE but ranks ninth under the composite score $S$ of Eq.~\eqref{eq:composite-score} (Table~\ref{tab:model-comparison}), discussed in Section~\ref{sec:discussion}.}
+\label{fig:rmse-comparison}
+\end{figure}

@@ -1,0 +1,34 @@
+\section{Future Work}
+\label{sec:future}
+
+Several directions for extending the system are identified below. Two are noted explicitly because they are sometimes proposed as generic future-work items for forecasting systems but are, in fact, already implemented in the evaluated system: a transformer architecture is already one of the nineteen registered models (Section~\ref{subsec:dl-models}), and a large language model already underlies the explanation layer (Section~\ref{sec:xai}). The corresponding future directions below therefore describe deepening or extending these existing capabilities rather than introducing them for the first time.
+
+\subsection{Real-Time and Streaming Forecasting}
+The current system operates in a batch mode, retraining models on a complete uploaded file per request. Extending the architecture to support incrementally updating forecasts as new observations arrive, without retraining every candidate model from scratch, would enable near-real-time dashboards and is a natural extension of the existing walk-forward evaluation procedure (Section~\ref{subsec:cv}), which already processes data in temporally ordered folds.
+
+\subsection{Cloud-Native and Horizontally Scaled Deployment}
+As noted in Section~\ref{sec:discussion}, the current file-based session and cache persistence layer is scoped to a single backend process. Migrating this state to a shared, network-accessible store would allow the backend to be deployed as multiple horizontally scaled instances behind a load balancer, and is a prerequisite for a cloud-native, auto-scaling deployment suitable for higher concurrent user volume than the current architecture targets.
+
+\subsection{Streaming Analytics Integration}
+Connecting the ingestion layer directly to a streaming data source, such as a point-of-sale event stream, rather than requiring a manually uploaded file, would allow the system to maintain a continuously updated forecast rather than one generated on demand, and would benefit from the real-time forecasting extension described above.
+
+\subsection{Additional and Pretrained Forecasting Transformer Variants}
+While a transformer encoder is already implemented (Section~\ref{subsec:dl-models}), it is trained from randomly initialized weights on each uploaded dataset independently. Recent pretrained, foundation-model-style time-series transformers, trained once on large heterogeneous time-series corpora and applied zero-shot or fine-tuned to a new series, represent a natural extension that could improve accuracy specifically on shorter series where training a transformer from scratch, as in the current implementation, is disadvantaged relative to statistical baselines.
+
+\subsection{Deeper Large Language Model Integration}
+The current explanation layer (Section~\ref{sec:xai}) uses a general-purpose language model constrained by prompt-level instructions to remain consistent with the system's deterministic outputs. An agentic extension, in which the language model can autonomously invoke system tools, for example to request an alternative forecast horizon, a different grouping, or a specific model's leaderboard entry, in response to a user's question, rather than being limited to the context assembled ahead of time by the backend, would extend the conversational assistant's capability without weakening the existing grounding constraints, provided any tool invocation remains restricted to read-only, deterministic system operations.
+
+\subsection{Reinforcement Learning for Adaptive Model Weighting}
+Rather than a fixed composite scoring formula (Eq.~\eqref{eq:composite-score}), a reinforcement-learning or bandit-based approach could adaptively learn per-dataset-category weightings for the score's component metrics based on observed downstream forecast-error feedback over time, potentially improving on the fixed weighting used in the present system while retaining the same auditable set of components.
+
+\subsection{Automated Machine Learning and Hyperparameter Tuning}
+As identified in Section~\ref{sec:discussion}, the gradient boosting, random forest, and deep learning models currently use fixed hyperparameters rather than per-dataset tuning. Integrating an automated hyperparameter optimization procedure, bounded by a computation budget consistent with the system's existing per-model timeout mechanism, is a direct and comparatively low-risk extension.
+
+\subsection{MLOps: Monitoring and Retraining Pipelines}
+The present system trains models synchronously within a single request and does not persist model artifacts for reuse or monitor forecast accuracy against subsequently observed actual values. Introducing a model-versioning and monitoring pipeline, tracking realized forecast error over time and triggering retraining when accuracy degrades, would extend the system toward a production MLOps workflow.
+
+\subsection{Federated Learning Across Multiple Retailers}
+For deployments serving multiple retail organizations, a federated learning scheme in which model updates, rather than raw sales data, are shared across organizations could allow the system to benefit from cross-organization patterns, such as category-level seasonality, without centralizing commercially sensitive transaction data.
+
+\subsection{Edge Deployment}
+Packaging a reduced subset of the lighter-weight statistical and classical machine learning models, which Section~\ref{sec:results} shows train in well under a second, for on-device or edge deployment would allow forecasting to run within a retail location's own point-of-sale or inventory-management hardware without a network dependency on the current server-based architecture, particularly relevant for the large-language-model explanation layer's external API dependency discussed in Section~\ref{sec:architecture}.

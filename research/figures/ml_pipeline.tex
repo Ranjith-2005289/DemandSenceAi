@@ -1,0 +1,42 @@
+% Training and prediction pipeline diagram
+\begin{figure}[!t]
+\centering
+\begin{tikzpicture}[
+    node distance=0.4cm and 0.5cm,
+    stepbox/.style={rectangle, rounded corners, draw=black, thick, minimum width=3.0cm, minimum height=0.75cm, align=center, font=\scriptsize, fill=blue!8},
+    modelbox/.style={rectangle, draw=black, thick, minimum width=1.55cm, minimum height=0.6cm, align=center, font=\tiny, fill=orange!10},
+    arrow/.style={-{Latex[length=2mm]}, thick}
+]
+
+\node[stepbox] (upload) {Uploaded file\\(CSV / Excel / JSON)};
+\node[stepbox, below=of upload] (clean) {Clean, gap-filled,\\outlier-capped series};
+\node[stepbox, below=of clean] (fanout) {Submit to thread pool\\(one task per model)};
+
+\node[modelbox, below left=0.5cm and 2.1cm of fanout] (stat) {Statistical\\(7 models)};
+\node[modelbox, right=0.25cm of stat] (ml) {Machine\\Learning (4)};
+\node[modelbox, right=0.25cm of ml] (dl) {Deep Learning (7)\\[-2pt]{\tiny gated by row count}};
+\node[modelbox, right=0.25cm of dl] (croston) {Intermittent\\(CrostonSBA)};
+
+\node[stepbox, below=1.0cm of ml] (cv) {Walk-forward CV per model\\(adaptive fold count)};
+\node[stepbox, below=of cv] (score) {Composite score $S$\\(Eq.~\ref{eq:composite-score}, Tukey-fence normalized)};
+\node[stepbox, below=of score] (select) {Select minimum-$S$ model;\\retain full leaderboard};
+\node[stepbox, below=of select] (respond) {Forecast + interval +\\leaderboard returned to UI};
+
+\draw[arrow] (upload) -- (clean);
+\draw[arrow] (clean) -- (fanout);
+\draw[arrow] (fanout) -- (stat);
+\draw[arrow] (fanout) -- (ml);
+\draw[arrow] (fanout) -- (dl);
+\draw[arrow] (fanout) -- (croston);
+\draw[arrow] (stat) -- (cv);
+\draw[arrow] (ml) -- (cv);
+\draw[arrow] (dl) -- (cv);
+\draw[arrow] (croston) -- (cv);
+\draw[arrow] (cv) -- (score);
+\draw[arrow] (score) -- (select);
+\draw[arrow] (select) -- (respond);
+
+\end{tikzpicture}
+\caption{Training and prediction pipeline. All nineteen registered models are submitted concurrently to a shared thread pool; deep learning models are withheld when the series falls below the frequency-specific minimum row count. Every surviving model is evaluated via walk-forward cross-validation and ranked by the composite score of Eq.~\eqref{eq:composite-score}.}
+\label{fig:ml-pipeline}
+\end{figure}

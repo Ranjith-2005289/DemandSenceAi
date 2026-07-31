@@ -1,0 +1,30 @@
+\begin{table}[!t]
+\caption{Fixed Hyperparameters for the Gradient Boosting, Random Forest, and Deep Learning Models}
+\label{tab:hyperparameters}
+\centering
+\begin{tabular}{@{}p{2.6cm}p{2.9cm}p{2.1cm}@{}}
+\toprule
+\textbf{Model} & \textbf{Hyperparameter} & \textbf{Value} \\
+\midrule
+\multirow{6}{2.6cm}{XGBoost} & Boosting rounds & 500 (early stop) \\
+ & Learning rate & 0.05 \\
+ & Max tree depth & 5 \\
+ & Subsample fraction & 0.8 \\
+ & $L_1$ / $L_2$ reg.\ ($\alpha,\lambda$) & 0.1 / 1.0 \\
+ & Early-stop patience & 30 rounds \\
+\midrule
+\multirow{4}{2.6cm}{Random Forest} & Number of trees & 100 \\
+ & Min.\ samples/split & 5 \\
+ & Min.\ samples/leaf & 2 \\
+ & Max.\ features/split & $\sqrt{p}$ \\
+\midrule
+\multirow{7}{2.6cm}{Deep Learning (shared, all 7 architectures)} & Lookback window & 30 steps \\
+ & Hidden size & 64 \\
+ & Recurrent layers & 2 \\
+ & Dropout rate & 0.2 \\
+ & Optimizer & Adam \\
+ & Learning rate & $10^{-3}$ \\
+ & Batch size / max epochs & 32 / 30 \\
+\bottomrule
+\end{tabular}
+\end{table}

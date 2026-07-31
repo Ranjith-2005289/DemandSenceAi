@@ -1,0 +1,25 @@
+\section{System Architecture}
+\label{sec:architecture}
+
+\subsection{Overall Architecture}
+Figure~\ref{fig:architecture} depicts the overall system architecture. The React frontend communicates exclusively with the FastAPI backend through a REST API; the backend is organized into the ingestion/preprocessing, model orchestration, and explanation layers introduced in Section~\ref{sec:proposed}, all three of which read from and write to a shared, file-based storage layer rather than a relational or document database, as discussed in Section~\ref{sec:proposed}.
+
+\input{figures/architecture_overall.tex}
+
+\subsection{Backend Architecture}
+The backend is organized as a set of FastAPI routers, one each for upload, forecasting, per-group ranking, the conversational assistant, and the business insights report, backed by a set of stateless service modules that implement preprocessing, model training and orchestration, best-model selection, per-model architectures, retrieval-augmented generation, and disk-based session persistence. This separation allows the model orchestration logic to remain entirely agnostic to which specific models accept additional arguments such as a country code or exogenous features; such per-model variation is instead handled by constructing a request-scoped override of the shared model registry at the router level.
+
+\subsection{Machine Learning Pipeline and Prediction Flow}
+Figure~\ref{fig:ml-pipeline} illustrates the training and prediction pipeline described in Section~\ref{sec:proposed}: the cleaned series is submitted to a shared thread pool that trains every applicable model concurrently, subject to the deep-learning row-count gate; every surviving model is evaluated by walk-forward cross-validation; and the composite score of Eq.~\eqref{eq:composite-score} determines the selected model and the retained leaderboard.
+
+\input{figures/ml_pipeline.tex}
+
+\subsection{Data Flow}
+Figure~\ref{fig:data-flow} details the automated data-cleaning flow applied to every uploaded dataset, exactly as executed for the evaluation dataset described in Section~\ref{sec:dataset}.
+
+\input{figures/data_flow.tex}
+
+\subsection{Deployment Architecture}
+Figure~\ref{fig:deployment} shows the deployment topology. The frontend is served as a static single-page application build, and the backend runs as an independent ASGI process; the two communicate over HTTP with cross-origin resource sharing restricted to an explicit allow-list, extensible for a production frontend origin via an environment variable. The only external network dependency in the entire architecture is the large-language-model API used exclusively by the explanation layer; the ingestion, preprocessing, and forecasting functionality of the system operates fully without external network access.
+
+\input{figures/deployment_architecture.tex}

@@ -1,0 +1,178 @@
+\section{Methodology}
+\label{sec:methodology}
+
+This section describes every one of the nineteen forecasting models implemented in the system, organized by family, together with the shared cross-validation procedure, evaluation metrics, and the composite model-selection score.
+
+\subsection{Statistical Models}
+
+\subsubsection{ARIMA}
+The autoregressive integrated moving average model~\cite{boxjenkins1970} models a differenced series as a linear function of its own past values and past error terms. For a series $y_t$ differenced $d$ times to obtain stationarity, an ARIMA$(p,d,q)$ model is
+\begin{equation}
+\label{eq:arima}
+\left(1 - \sum_{i=1}^{p}\phi_i L^i\right)(1-L)^d y_t = \left(1 + \sum_{j=1}^{q}\theta_j L^j\right)\varepsilon_t,
+\end{equation}
+where $L$ is the lag operator, $\phi_i$ and $\theta_j$ are the autoregressive and moving-average coefficients, and $\varepsilon_t$ is white noise. The implementation performs a grid search over $p,q \in \{0,1,2\}$ (bounded to keep search cost tractable) selecting the order minimizing Akaike Information Criterion on an initial training partition, and reuses this order across all cross-validation folds and the final refit.
+
+\subsubsection{SARIMA and SARIMAX}
+The seasonal extension augments Eq.~\eqref{eq:arima} with seasonal autoregressive and moving-average polynomials of order $(P,D,Q)_m$ at seasonal period $m$, inferred automatically from the detected sampling frequency (for example $m=7$ for daily data). SARIMAX additionally admits an exogenous regression term $\boldsymbol{\beta}^\top \mathbf{x}_t$. In the implementation, the exogenous vector $\mathbf{x}_t$ always includes calendar cyclical features (sine-cosine encodings of month and day-of-week, and a month-end indicator) and, when available and selected by the user, real price and promotional features. To bound computational cost, the order search and per-fold refitting are simplified for seasonal periods exceeding a configured threshold, since state-space estimation cost scales approximately with $m^2$.
+
+\subsubsection{Holt-Winters Exponential Smoothing}
+The Holt-Winters method~\cite{winters1960holtwinters} recursively updates level $\ell_t$, trend $b_t$, and seasonal $s_t$ components. In additive form,
+\begin{align}
+\ell_t &= \alpha (y_t - s_{t-m}) + (1-\alpha)(\ell_{t-1} + b_{t-1}), \label{eq:hw-level}\\
+b_t &= \beta (\ell_t - \ell_{t-1}) + (1-\beta) b_{t-1}, \label{eq:hw-trend}\\
+s_t &= \gamma (y_t - \ell_t) + (1-\gamma) s_{t-m}, \label{eq:hw-season}\\
+\hat{y}_{t+h} &= \ell_t + h\,b_t + s_{t+h-m\lceil h/m\rceil}, \label{eq:hw-forecast}
+\end{align}
+with an analogous multiplicative form used when the series exhibits variance that scales with its level. The implementation grid-searches additive and multiplicative trend and seasonal combinations under cross-validation, with damped-trend smoothing enabled throughout, and reduces to plain (non-seasonal) exponential smoothing when fewer than two full seasonal cycles are available.
+
+\subsubsection{Moving Average}
+A simple moving-average baseline forecasts the next value as the mean of the preceding $w$ observations,
+\begin{equation}
+\hat{y}_{t+1} = \frac{1}{w}\sum_{i=0}^{w-1} y_{t-i},
+\end{equation}
+with the window length $w$ selected by cross-validation from a candidate set, and multi-step forecasts generated recursively.
+
+\subsubsection{Prophet}
+Prophet~\cite{taylor2018prophet} models a series as an additive (or, when the coefficient of variation of the series suggests multiplicative seasonality, multiplicative) decomposition
+\begin{equation}
+\label{eq:prophet}
+y_t = g(t) + s(t) + h(t) + \varepsilon_t,
+\end{equation}
+where $g(t)$ is a piecewise-linear or logistic trend with automatically detected changepoints, $s(t)$ represents Fourier-series yearly and weekly seasonal terms, and $h(t)$ represents holiday effects. The implementation enables yearly and weekly seasonality conditionally on series length, sets the changepoint prior scale to 0.1 and the changepoint range to 0.9, and optionally incorporates a specific country's public holidays into $h(t)$ when a country code is supplied by the user, via the model's native country-holiday mechanism.
+
+\subsection{Machine Learning Models}
+\label{subsec:ml-models}
+All four machine learning models in this subsection are trained on the identical engineered feature representation described in Section~\ref{sec:dataset} (lags, rolling statistics, exponentially weighted moving averages, and calendar features), constructed from the \emph{detrended residual} of the series rather than the raw series itself. A global linear trend
+\begin{equation}
+\hat{g}(t) = a + bt
+\end{equation}
+is fit by ordinary least squares over the integer time index $t$, and each tree-based or instance-based model is trained to predict the residual $r_t = y_t - \hat{g}(t)$. This detrending step is necessary because tree-based and instance-based regressors cannot extrapolate outside the range of target values observed during training and would otherwise plateau on a trending series; predicting the stationary residual and adding the extrapolated trend back at forecast time avoids this failure mode.
+
+\subsubsection{XGBoost}
+Gradient-boosted trees~\cite{chen2016xgboost} construct an additive ensemble $F(\mathbf{x}) = \sum_{k=1}^{K} f_k(\mathbf{x})$ of regression trees, minimizing the regularized objective
+\begin{equation}
+\label{eq:xgboost-obj}
+\mathcal{L} = \sum_{i=1}^{n} \ell\!\left(y_i, \hat{y}_i\right) + \sum_{k=1}^{K}\Omega(f_k), \quad \Omega(f) = \gamma T + \tfrac{1}{2}\lambda\|w\|^2,
+\end{equation}
+where $\ell$ is the squared-error loss, $T$ is the number of leaves of tree $f$, $w$ are its leaf weights, and $\gamma$, $\lambda$ penalize tree complexity and leaf-weight magnitude respectively. The implementation trains with 500 boosting rounds under early stopping (patience of 30 rounds evaluated on the held-out cross-validation fold), a learning rate of 0.05, a maximum tree depth of 5, subsample and column-subsample fractions of 0.8, $L_1$ regularization ($\alpha$) of 0.1, and $L_2$ regularization ($\lambda$) of 1.0; the final model is refit on the complete series using the number of boosting rounds selected by early stopping during cross-validation. Gain-based feature importances are retained from the final fit for the explainability layer (Section~\ref{sec:xai}).
+
+\subsubsection{Random Forest}
+The random forest~\cite{breiman2001randomforest} instead constructs an ensemble of $K$ regression trees, each trained on a bootstrap resample of the training data with a random subset of features considered at each split, and averages their predictions,
+\begin{equation}
+\hat{y} = \frac{1}{K}\sum_{k=1}^{K} T_k(\mathbf{x}).
+\end{equation}
+The implementation uses 100 trees, a minimum split size of 5, a minimum leaf size of 2, and considers $\sqrt{p}$ features at each split, where $p$ is the total feature count. Out-of-bag $R^2$ is retained as a free internal validation estimate, and a $95\%$ prediction interval is derived from the empirical standard deviation across individual trees' predictions at each forecast step, in place of the generic cross-validation-error-based interval used for models without a native uncertainty estimate.
+
+\subsubsection{$k$-Nearest-Neighbor Regression}
+The $k$-nearest-neighbor regressor~\cite{cover1967knn} predicts the (distance-weighted) average target value of the $k$ nearest training points in feature space,
+\begin{equation}
+\hat{y}(\mathbf{x}) = \frac{\sum_{i \in \mathcal{N}_k(\mathbf{x})} w_i\, y_i}{\sum_{i \in \mathcal{N}_k(\mathbf{x})} w_i}, \qquad w_i = \frac{1}{d(\mathbf{x}, \mathbf{x}_i)},
+\end{equation}
+using Euclidean distance $d(\cdot,\cdot)$ on the robust-scaled feature representation. The implementation cross-validates $k \in \{3,5,7,10,15\}$, subject to $k$ remaining below half the available fold size.
+
+\subsubsection{Support Vector Regression}
+Support vector regression~\cite{cortes1995svm} fits a function that deviates from each training target by at most $\epsilon$, while remaining as flat as possible, formalized as
+\begin{equation}
+\min_{\mathbf{w},b}\ \tfrac{1}{2}\|\mathbf{w}\|^2 + C\sum_{i=1}^n \left(\xi_i + \xi_i^{*}\right)
+\end{equation}
+subject to $y_i - (\mathbf{w}^\top\phi(\mathbf{x}_i)+b) \le \epsilon + \xi_i$ and its symmetric counterpart, with slack variables $\xi_i,\xi_i^{*}\ge 0$ and a radial basis function kernel $\phi$. The implementation cross-validates the penalty parameter $C$ and the tolerance $\epsilon$, and scales the target itself with a robust scaler in addition to the feature matrix.
+
+\subsection{Deep Learning Models}
+\label{subsec:dl-models}
+All seven deep learning models share a common data representation, a sliding window of the preceding $L=30$ time steps predicting the next single step, a common optimization configuration (Adam optimizer, learning rate $10^{-3}$, batch size 32, weight decay $10^{-5}$, plateau-based learning-rate reduction), and common regularization (dropout rate 0.2, gradient-norm clipping at 1.0, early stopping with a patience of 5 epochs over a maximum of 30 epochs), summarized alongside the XGBoost and Random Forest hyperparameters in Table~\ref{tab:hyperparameters}. Every model minimizes the mean squared error between the predicted and true next-step value in min-max-scaled space,
+\begin{equation}
+\label{eq:mse-loss}
+\mathcal{L}_{\text{MSE}} = \frac{1}{N}\sum_{i=1}^{N}\left(\hat{y}_i - y_i\right)^2 .
+\end{equation}
+Multi-step forecasts are produced recursively, feeding each predicted value back as the most recent input for the subsequent step. The implementation uses PyTorch~\cite{paszke2019pytorch} when available, with an automatic fallback to a Keras-based implementation of the same seven architectures otherwise.
+
+\input{tables/hyperparameters.tex}
+
+\subsubsection{RNN}
+The simple recurrent network updates a hidden state $\mathbf{h}_t = \tanh(W_h \mathbf{h}_{t-1} + W_x x_t + \mathbf{b})$ at each step and predicts from the final hidden state through a linear output layer, using a hidden size of 64 across 2 stacked layers.
+
+\subsubsection{LSTM}
+The long short-term memory network~\cite{hochreiter1997lstm,gers2000forget} augments the simple recurrent update with input, forget, and output gates and a separate cell state $\mathbf{c}_t$,
+\begin{align}
+\mathbf{f}_t &= \sigma(W_f[\mathbf{h}_{t-1},x_t]+\mathbf{b}_f), \\
+\mathbf{i}_t &= \sigma(W_i[\mathbf{h}_{t-1},x_t]+\mathbf{b}_i), \\
+\tilde{\mathbf{c}}_t &= \tanh(W_c[\mathbf{h}_{t-1},x_t]+\mathbf{b}_c), \\
+\mathbf{c}_t &= \mathbf{f}_t \odot \mathbf{c}_{t-1} + \mathbf{i}_t \odot \tilde{\mathbf{c}}_t, \\
+\mathbf{o}_t &= \sigma(W_o[\mathbf{h}_{t-1},x_t]+\mathbf{b}_o), \\
+\mathbf{h}_t &= \mathbf{o}_t \odot \tanh(\mathbf{c}_t), \label{eq:lstm}
+\end{align}
+mitigating the vanishing-gradient problem of the simple recurrent update, again with hidden size 64 across 2 layers.
+
+\subsubsection{GRU}
+The gated recurrent unit~\cite{cho2014gru} simplifies the LSTM gating to an update gate $\mathbf{z}_t$ and reset gate $\mathbf{r}_t$,
+\begin{align}
+\mathbf{z}_t &= \sigma(W_z[\mathbf{h}_{t-1},x_t]), \\
+\mathbf{r}_t &= \sigma(W_r[\mathbf{h}_{t-1},x_t]), \\
+\tilde{\mathbf{h}}_t &= \tanh\!\big(W[\mathbf{r}_t \odot \mathbf{h}_{t-1}, x_t]\big), \\
+\mathbf{h}_t &= (1-\mathbf{z}_t)\odot\mathbf{h}_{t-1} + \mathbf{z}_t \odot \tilde{\mathbf{h}}_t, \label{eq:gru}
+\end{align}
+with the same hidden size and depth as the LSTM variant.
+
+\subsubsection{BiLSTM}
+The bidirectional LSTM processes the input window in both forward and backward temporal order using two independent LSTM layers as in Eq.~\eqref{eq:lstm}, concatenating their final hidden states before the output layer, allowing the representation at each step to incorporate both preceding and following context within the lookback window.
+
+\subsubsection{CNN-1D}
+The one-dimensional convolutional model applies a stack of temporal convolutions with kernel size 3 and ReLU activation directly over the input window, followed by a dense output layer, extracting local temporal patterns without recurrence.
+
+\subsubsection{Temporal Convolutional Network}
+The temporal convolutional network~\cite{bai2018tcn} stacks causal, dilated one-dimensional convolutions so that the receptive field grows exponentially with depth while preserving strict temporal causality (no leakage of future information), with residual connections between blocks.
+
+\subsubsection{Transformer}
+The transformer encoder~\cite{vaswani2017attention} replaces recurrence with multi-head self-attention,
+\begin{equation}
+\label{eq:attention}
+\text{Attention}(Q,K,V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right)V,
+\end{equation}
+computed over positionally encoded representations of the input window, allowing every time step to attend directly to every other time step within the lookback window regardless of distance, in contrast to the sequential propagation required by recurrent architectures.
+
+\subsection{Intermittent Demand: Croston's Method with the Syntetos-Boylan Correction}
+For series with a substantial fraction of zero-demand periods, the preceding models are known to perform poorly relative to methods designed specifically for sparse demand. Croston's method~\cite{croston1972} separately applies simple exponential smoothing, with smoothing parameter $\alpha$, to the non-zero demand sizes $z$ and to the intervals $q$ between successive non-zero periods,
+\begin{align}
+\hat{z}_t &= \alpha z_t + (1-\alpha)\hat{z}_{t-1}, \label{eq:croston-size}\\
+\hat{q}_t &= \alpha q_t + (1-\alpha)\hat{q}_{t-1}, \label{eq:croston-interval}
+\end{align}
+and forecasts a constant future demand rate $\hat{y} = \hat{z}_t / \hat{q}_t$. The Syntetos-Boylan approximation~\cite{syntetos2005sba} corrects a known positive bias in this estimator,
+\begin{equation}
+\label{eq:sba}
+\hat{y}_{\text{SBA}} = \left(1 - \frac{\alpha}{2}\right)\frac{\hat{z}_t}{\hat{q}_t},
+\end{equation}
+and is the variant used in the implementation, with $\alpha=0.1$. Because the forecast is a constant rate rather than a per-period curve, the model naturally competes on an equal footing with every other candidate under the shared cross-validation and selection procedure, and is expected to rank favorably specifically on sparse series and unfavorably on dense, trending, or seasonal series.
+
+\subsection{Cross-Validation Procedure}
+\label{subsec:cv}
+Every model is evaluated using walk-forward, expanding-window cross-validation~\cite{bergmeir2012cv} rather than a single fixed train-test split, respecting temporal ordering so that no fold is trained on data that temporally follows its validation window. The number of folds $k$ is determined adaptively from the number of observations $n$,
+\begin{equation}
+\label{eq:cv-folds}
+k = \min\!\left(k_{\max},\ \max\!\left(k_{\min},\ \left\lfloor n/100\right\rfloor\right)\right),
+\end{equation}
+with $k_{\min}=2$ and $k_{\max}=5$ in the implementation, so that datasets with more observations are evaluated with more folds, up to a bound that keeps the total re-fitting cost tractable for computationally expensive models.
+
+\subsection{Evaluation Metrics}
+\label{subsec:metrics}
+Four standard regression metrics are computed for every fold and averaged across folds. With $y_i$ the true value, $\hat{y}_i$ the predicted value, and $n$ the number of evaluated points,
+\begin{align}
+\text{RMSE} &= \sqrt{\frac{1}{n}\sum_{i=1}^{n}(y_i-\hat{y}_i)^2}, \label{eq:rmse}\\
+\text{MAE} &= \frac{1}{n}\sum_{i=1}^{n}|y_i-\hat{y}_i|, \label{eq:mae}\\
+\text{MAPE} &= \frac{1}{n}\sum_{i=1}^{n}\left|\frac{y_i-\hat{y}_i}{y_i}\right|, \label{eq:mape}\\
+R^2 &= 1 - \frac{\sum_{i=1}^n (y_i-\hat{y}_i)^2}{\sum_{i=1}^n (y_i-\bar{y})^2}. \label{eq:r2}
+\end{align}
+
+\subsection{Composite Multi-Criteria Selection Score}
+\label{subsec:composite-score}
+Rather than ranking candidate models by a single metric, most commonly RMSE, the implementation computes a composite score $S$ for every successfully trained model as a weighted combination of six normalized components,
+\begin{equation}
+\label{eq:composite-score}
+S = 0.40\,\widetilde{\text{RMSE}} + 0.20\,\widetilde{\text{MAE}} + 0.20\,\widetilde{\text{MAPE}} + 0.10\,\widetilde{\text{Stab}} + 0.10\,\widetilde{\text{Speed}} - 0.10\,R^2,
+\end{equation}
+where $\widetilde{(\cdot)}$ denotes normalization by a robust scale factor, and $\widetilde{\text{Speed}}$ is the mean of normalized training and prediction time. Each normalizing denominator is computed not as the raw maximum across candidate models, but as a Tukey outlier fence,
+\begin{equation}
+\label{eq:tukey-fence}
+\text{fence} = Q_3 + 1.5\,(Q_3-Q_1),
+\end{equation}
+over the corresponding metric values across all successfully trained candidates, where $Q_1$ and $Q_3$ are the first and third quartiles. This choice is deliberate: normalizing by the raw maximum allows a single catastrophically mis-fit model to compress every other model's normalized error to near zero, at which point the ranking is effectively decided by the remaining, lower-weighted stability and speed terms rather than by accuracy. The stability term $\text{Stab}$ itself penalizes both an implausible discontinuity between the last observed value and the first forecast value, and a mismatch between the volatility of the forecast and the historical volatility of the series, both normalized by the historical standard deviation. The model with the lowest composite score $S$ among successfully trained, numerically usable candidates is selected as the system's headline forecast, with the full ranking retained for inspection, as reported in Section~\ref{sec:results}.

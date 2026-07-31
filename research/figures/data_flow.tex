@@ -1,0 +1,25 @@
+% Data preprocessing flow diagram
+\begin{figure}[!t]
+\centering
+\begin{tikzpicture}[
+    node distance=0.45cm,
+    stepbox/.style={rectangle, rounded corners, draw=black, thick, minimum width=6.6cm, minimum height=0.65cm, align=center, font=\scriptsize, fill=green!8},
+    arrow/.style={-{Latex[length=2mm]}, thick}
+]
+
+\node[stepbox] (s1) {1. Column detection (date / target / group / exogenous)};
+\node[stepbox, below=of s1] (s2) {2. Date parsing cascade \& target numeric coercion};
+\node[stepbox, below=of s2] (s3) {3. Index set, sorted; duplicate timestamps summed};
+\node[stepbox, below=of s3] (s4) {4. Frequency inferred; calendar gaps reindexed};
+\node[stepbox, below=of s4] (s5) {5. Missing values: interpolate $\to$ ffill $\to$ bfill};
+\node[stepbox, below=of s5] (s6) {6. IQR outlier detection and capping};
+\node[stepbox, below=of s6] (s7) {7. Exogenous features aligned (price: mean/ffill; promo: max/zero)};
+\node[stepbox, below=of s7, fill=blue!10] (s8) {Clean target series + aligned exogenous frame};
+
+\foreach \a/\b in {s1/s2, s2/s3, s3/s4, s4/s5, s5/s6, s6/s7, s7/s8}
+    \draw[arrow] (\a) -- (\b);
+
+\end{tikzpicture}
+\caption{Automated data preprocessing pipeline applied to every uploaded dataset prior to model training, exactly as executed for the evaluation dataset in Section~\ref{sec:dataset} (Table~\ref{tab:preprocessing-steps}).}
+\label{fig:data-flow}
+\end{figure}

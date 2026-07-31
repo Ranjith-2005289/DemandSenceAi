@@ -1,0 +1,33 @@
+% Overall system architecture diagram
+\begin{figure}[!t]
+\centering
+\begin{tikzpicture}[
+    node distance=0.55cm and 0.9cm,
+    box/.style={rectangle, rounded corners, draw=black, thick, minimum width=2.6cm, minimum height=0.9cm, align=center, font=\scriptsize, fill=blue!8},
+    dbox/.style={rectangle, rounded corners, draw=black, thick, minimum width=2.6cm, minimum height=0.9cm, align=center, font=\scriptsize, fill=green!10},
+    ebox/.style={rectangle, rounded corners, draw=black, thick, minimum width=2.6cm, minimum height=0.9cm, align=center, font=\scriptsize, fill=orange!12},
+    sbox/.style={rectangle, rounded corners, draw=black, thick, minimum width=5.6cm, minimum height=0.8cm, align=center, font=\scriptsize, fill=gray!8},
+    arrow/.style={-{Latex[length=2mm]}, thick}
+]
+
+\node[box] (frontend) {React SPA\\Upload / Config / Results};
+\node[box, below=of frontend] (api) {FastAPI REST API\\(CORS-restricted)};
+
+\node[dbox, below left=0.5cm and -0.3cm of api] (prep) {Ingestion \&\\Preprocessing Layer};
+\node[dbox, right=0.35cm of prep] (orch) {Model Orchestration\\(19-model ensemble)};
+\node[ebox, right=0.35cm of orch] (xai) {Explanation Layer\\(RAG + LLM)};
+
+\node[sbox, below=0.6cm of orch] (storage) {Disk Storage: uploads/, processed/,\\session\_data/, ChromaDB vector store};
+
+\draw[arrow] (frontend) -- (api);
+\draw[arrow] (api) -- (prep);
+\draw[arrow] (api) -- (orch);
+\draw[arrow] (api) -- (xai);
+\draw[arrow] (prep) -- (storage);
+\draw[arrow] (orch) -- (storage);
+\draw[arrow] (xai) -- (storage);
+
+\end{tikzpicture}
+\caption{Overall system architecture. The React frontend communicates exclusively with the FastAPI backend over a REST API; the backend's three logical layers, ingestion/preprocessing, model orchestration, and explanation, all read from and write to a shared file-based storage layer rather than a database.}
+\label{fig:architecture}
+\end{figure}

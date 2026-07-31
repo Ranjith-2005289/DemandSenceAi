@@ -1,0 +1,33 @@
+# Environment / secrets
+.env
+*.env
+!.env.example
+
+# Python
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Logs
+*.log
+
+# Runtime data
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/processed/*
+!backend/processed/.gitkeep
+backend/session_data/forecast/*
+!backend/session_data/forecast/.gitkeep
+backend/session_data/chat/*
+!backend/session_data/chat/.gitkeep
+
+# RAG vector store — regenerated automatically on first run (see rag_service.py)
+backend/.chroma/
+
+# OS
+.DS_Store

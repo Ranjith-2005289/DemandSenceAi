@@ -1,0 +1,86 @@
+\section{Dataset Description}
+\label{sec:dataset}
+
+\subsection{Source and Structure}
+The evaluation dataset used in this paper is a retail transaction log consisting of 1{,}000 individual sale transactions recorded between January 1, 2023 and January 1, 2024. Each row represents a single transaction and contains nine columns: a transaction identifier, a transaction date, a customer identifier, customer gender, customer age, a product category (Beauty, Clothing, or Electronics), the quantity of items purchased, the price per unit, and the total transaction amount. Table~\ref{tab:dataset-features} summarizes the raw schema. The dataset contains no missing values at the transaction level; all data-quality handling described below arises from aggregating irregular transaction timestamps into a regular daily calendar, not from missing source fields.
+
+\begin{table}[!t]
+\caption{Raw Dataset Schema}
+\label{tab:dataset-features}
+\centering
+\begin{tabular}{@{}p{2.1cm}p{2.7cm}p{2.6cm}@{}}
+\toprule
+\textbf{Column} & \textbf{Type} & \textbf{Role} \\
+\midrule
+Transaction ID & Integer & Identifier (excluded) \\
+Date & String (date) & Time index \\
+Customer ID & String & Identifier (excluded) \\
+Gender & Categorical & Not used in target series \\
+Age & Integer & Not used in target series \\
+Product Category & Categorical & Optional grouping dimension \\
+Quantity & Integer & Alternative target candidate \\
+Price per Unit & Integer & Optional exogenous (price) \\
+Total Amount & Integer & Target variable (used) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Target Variable}
+The target variable forecast in this evaluation is \emph{Total Amount}, aggregated by summation across all transactions sharing the same calendar date, yielding a single daily total-sales series. This aggregation is performed automatically by the preprocessing pipeline described in Section~\ref{subsec:data-pipeline} rather than by manual data preparation, since duplicate timestamps are, by design, summed under the assumption that they represent multiple transactions within the same period.
+
+\subsection{Automated Column Detection}
+Presented with the raw file, the upload endpoint automatically identified \emph{Date} as the date column and flagged \emph{Total Amount}, \emph{Quantity}, and \emph{Price per Unit} as numeric columns with plausible target semantics based on column-name keyword matching, correctly suggesting \emph{Date} as the date column and, in this evaluation run, \emph{Quantity} was the column ranked first by the keyword heuristic; \emph{Total Amount} was selected manually for this evaluation as the more business-relevant revenue target. \emph{Product Category} was correctly identified as a candidate grouping dimension.
+
+\subsection{Preprocessing and Cleaning}
+Table~\ref{tab:preprocessing-steps} reports the exact transformations applied by the automated preprocessing pipeline for this dataset, exactly as logged by the system at run time. The raw 1{,}000 transactions, spanning 345 distinct calendar dates, were aggregated by date-wise summation, after which 655 duplicate-timestamp rows were consolidated. The resulting irregular 345-point series was then reindexed to a complete daily calendar spanning January 1, 2023 to January 1, 2024 (366 calendar days inclusive), introducing 21 previously absent calendar dates with no recorded transactions. The values at these newly introduced dates, together with no other missing values, were filled by time-aware linear interpolation. Finally, interquartile-range-based outlier capping (multiplier 2.5) identified three days with anomalously high aggregated sales and capped them to an upper bound of 6{,}041.88, leaving a final clean series of 366 daily observations with mean 1{,}299.89, standard deviation 1{,}148.30, and median 1{,}060.00, summarized in Table~\ref{tab:dataset-stats}.
+
+\begin{table}[!t]
+\caption{Preprocessing Steps Applied (Logged at Run Time)}
+\label{tab:preprocessing-steps}
+\centering
+\begin{tabular}{@{}p{0.5cm}p{7.3cm}@{}}
+\toprule
+\textbf{\#} & \textbf{Transformation} \\
+\midrule
+1 & Date column parsed to a datetime index. \\
+2 & Target column coerced to a numeric (float) type. \\
+3 & Index sorted chronologically (2023-01-01 to 2024-01-01). \\
+4 & 655 duplicate timestamps aggregated by summation (1{,}000 $\rightarrow$ 345 rows). \\
+5 & Calendar gaps filled; 21 missing dates added (366 rows total). \\
+6 & 21 missing values filled by time-interpolation, forward-, and backward-fill. \\
+7 & Outlier capping (IQR $\times$ 2.5): 3 values capped to an upper bound of 6{,}041.88. \\
+8 & High-frequency smoothing skipped (not applicable at daily frequency). \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[!t]
+\caption{Descriptive Statistics of the Cleaned Daily Series}
+\label{tab:dataset-stats}
+\centering
+\begin{tabular}{@{}lr@{}}
+\toprule
+\textbf{Statistic} & \textbf{Value} \\
+\midrule
+Observations (days) & 366 \\
+Minimum & 25.00 \\
+Maximum (post-capping) & 6{,}041.88 \\
+Mean & 1{,}299.89 \\
+Median & 1{,}060.00 \\
+Standard deviation & 1{,}148.30 \\
+Inferred frequency & Daily \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Feature Engineering}
+For the machine learning and deep learning model families described in Section~\ref{sec:methodology}, the cleaned univariate series is transformed into a supervised-learning representation consisting of lagged values at eight lags (1, 2, 3, 7, 14, 21, 28, and 30 days), rolling mean, standard deviation, minimum, and maximum statistics over 7-, 14-, and 30-day windows, exponentially weighted moving averages at two spans, and calendar features including day-of-week, month, quarter, day-of-year, week-of-year, month-boundary indicators, and sine-cosine cyclical encodings of day-of-week and month. This feature representation is identical across the gradient boosting, random forest, and instance-based models to ensure a fair comparison. Where price and promotional columns are present and selected, as described in Section~\ref{subsec:data-pipeline}, they are appended to this feature matrix directly.
+
+\subsection{Normalization}
+Feature matrices supplied to the gradient boosting, random forest, $k$-nearest-neighbor, and support-vector models are scaled using a robust scaler based on the median and interquartile range, rather than a standard mean-variance scaler, since raw retail sales series frequently contain heavy-tailed spikes even after outlier capping. Deep learning models instead use min-max scaling to the unit interval, fit on the training partition only and applied unchanged to validation and forecast data, consistent with standard practice for recurrent and convolutional sequence models.
+
+\subsection{Train-Validation Partitioning}
+No single fixed train-test split is used. Instead, every model is evaluated using walk-forward, expanding-window cross-validation (Section~\ref{sec:methodology}), with the number of folds determined adaptively from the series length. For this 366-observation dataset, the adaptive rule yields three cross-validation folds per model, after which every model is refit on the complete cleaned series for the final reported forecast.
+
+\subsection{Dataset Scale Relative to Model Requirements}
+At 366 daily observations, this dataset falls below the deep-learning row-count threshold described in Section~\ref{sec:methodology}, and the seven deep learning models were consequently withheld automatically for this evaluation run, a decision reported explicitly by the system rather than silently applied. The remaining twelve statistical, machine learning, and intermittent-demand models were all trained and evaluated successfully, and the corresponding results are reported in Section~\ref{sec:results}.

@@ -1,0 +1,46 @@
+\section{Experimental Setup}
+\label{sec:experimental}
+
+\subsection{Hardware}
+All experiments reported in this paper were executed on a single machine equipped with an Apple M3 Pro system-on-chip (ARM64 architecture) and 18~GB of unified memory, running macOS 15.7.3. No GPU acceleration was used; all deep learning training, where attempted, executed on CPU. This is noted explicitly because it directly affects the deep-learning training-time figures reported in Section~\ref{sec:results} and should not be taken as representative of GPU-accelerated training throughput.
+
+\subsection{Software Environment}
+The backend is implemented in Python 3.14 using the library versions summarized in Table~\ref{tab:tech-stack}. The classical machine learning models (Section~\ref{subsec:ml-models}) are implemented using scikit-learn~\cite{pedregosa2011sklearn}, and the statistical models (ARIMA, SARIMA, SARIMAX, and Holt-Winters exponential smoothing) are implemented using the statsmodels library~\cite{seabold2010statsmodels}. The frontend is implemented in React 18 using Vite as the build tool and development server, Recharts for charting, Axios for HTTP communication, and Tailwind CSS for styling. The complete dependency set for both frontend and backend is pinned in version-controlled dependency manifests to ensure the reported results are reproducible against the exact library versions used.
+
+\begin{table}[!t]
+\caption{Technology Stack}
+\label{tab:tech-stack}
+\centering
+\begin{tabular}{@{}p{2.5cm}p{2.0cm}p{2.5cm}@{}}
+\toprule
+\textbf{Component} & \textbf{Technology} & \textbf{Version} \\
+\midrule
+Backend framework & FastAPI & 0.136.0 \\
+ASGI server & Uvicorn & 0.44.0 \\
+Data manipulation & pandas & 3.0.2 \\
+Numerical computing & NumPy & 2.4.4 \\
+Classical ML & scikit-learn & 1.8.0 \\
+Gradient boosting & XGBoost & 3.2.0 \\
+Statistical models & statsmodels & 0.14.6 \\
+Additive regression & Prophet & 1.3.0 \\
+Deep learning & PyTorch & 2.11.0 \\
+LLM / embeddings & google-genai & 2.12.1 \\
+Vector store & ChromaDB & 1.5.9 \\
+Frontend framework & React & 18.3 \\
+Build tool & Vite & 6.x \\
+Charting & Recharts & 2.15 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Large Language Model Configuration}
+The explanation layer uses a general-purpose instruction-tuned language model (Gemini, accessed through the \texttt{google-genai} client library) for both conversational responses and structured report generation, and a corresponding embedding model for retrieval over the retail-domain knowledge base. Report generation additionally constrains the model to return a fixed JSON schema (dataset summary, forecast summary, recommendations, revenue/trend signal, and stock-alert summary), so that the frontend can render the response deterministically rather than parsing free-form text.
+
+\subsection{Evaluation Protocol}
+Every model is evaluated using the walk-forward cross-validation procedure and adaptive fold-count rule described in Eq.~\eqref{eq:cv-folds}, rather than a single held-out test split, and the four metrics of Eqs.~\eqref{eq:rmse}--\eqref{eq:r2} are computed on each fold and averaged. Model selection among successfully trained candidates uses the composite score of Eq.~\eqref{eq:composite-score}. No experiment in this paper alters this protocol; the same evaluation procedure that the deployed system uses in production is the one used to generate the results reported in Section~\ref{sec:results}, so that the reported numbers reflect exactly what an end user of the system would observe.
+
+\subsection{Hyperparameter Selection}
+Hyperparameters for the statistical models (ARIMA/SARIMA/SARIMAX order, Holt-Winters trend/seasonal form, moving-average window) are selected automatically per dataset by grid search under cross-validation, as described in Section~\ref{sec:methodology}; the machine learning models' regularization and neighbor-count hyperparameters ($k$ for $k$-nearest neighbors; $C$ and $\epsilon$ for support vector regression) are likewise cross-validated per dataset. The gradient boosting, random forest, and deep learning architectures use fixed hyperparameter configurations, reported in full in Section~\ref{sec:methodology}, that were established during development rather than tuned per dataset; per-dataset hyperparameter search for these models is identified as future work in Section~\ref{sec:future}.
+
+\subsection{Dataset Used for Evaluation}
+The experiments reported in Section~\ref{sec:results} use the retail transaction dataset described in Section~\ref{sec:dataset}, uploaded and processed through the deployed system's own upload and forecast endpoints rather than through a separate offline evaluation script, so that the reported figures reflect the exact end-to-end behavior, including automated column detection and preprocessing, that a user of the system would experience.
