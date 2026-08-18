@@ -1,0 +1,25 @@
+\begin{table}[!t]
+\caption{M5 Aggregation Levels Evaluated}
+\label{tab:levels}
+\centering
+\begin{tabular}{@{}clrrc@{}}
+\toprule
+\textbf{Level} & \textbf{Grouping} & \textbf{Series} & \textbf{Median CV} & \textbf{Powered} \\
+\midrule
+3  & store                  &  10 & 0.231 & no \\
+5  & department             &   7 & 0.246 & no \\
+9  & store $\times$ dept.   &  70 & 0.317 & yes \\
+10 & item                   & 200 & 0.531 & yes \\
+12 & item $\times$ store    & 200 & 0.765 & yes \\
+\bottomrule
+\end{tabular}
+\vspace{2pt}
+\begin{minipage}{\columnwidth}
+\footnotesize
+CV denotes the coefficient of variation (standard deviation over mean) of the
+series, a scale-free measure of volatility. Levels~3 and~5 exhaust their
+populations---M5 contains exactly ten stores and seven departments---so they
+cannot be enlarged and no significance is claimed from them. Levels~10 and~12
+are capped at 200 series sampled by descending volume.
+\end{minipage}
+\end{table}

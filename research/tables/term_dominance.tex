@@ -1,0 +1,31 @@
+\begin{table}[!t]
+\caption{Nominal Weight Versus Effective Influence on Model Selection}
+\label{tab:term-dominance}
+\centering
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\multirow{2}{*}{\textbf{Term}} & \multirow{2}{*}{\textbf{Weight}} & \multicolumn{3}{c}{\textbf{Effective share}} \\
+\cmidrule(l){3-5}
+ & & \textbf{L9} & \textbf{L10} & \textbf{L12} \\
+\midrule
+Speed      & \phantom{$-$}0.10 & \textbf{0.883} & \textbf{0.751} & \textbf{0.631} \\
+$R^2$      & $-$0.10           & 0.035 & 0.101 & 0.251 \\
+RMSE       & \phantom{$-$}0.40 & 0.035 & 0.071 & 0.054 \\
+MAE        & \phantom{$-$}0.20 & 0.019 & 0.039 & 0.028 \\
+MAPE       & \phantom{$-$}0.20 & 0.015 & 0.029 & 0.027 \\
+Stability  & \phantom{$-$}0.10 & 0.012 & 0.010 & 0.009 \\
+\bottomrule
+\end{tabular}
+\vspace{2pt}
+\begin{minipage}{\columnwidth}
+\footnotesize
+Effective share is the fraction of total score spread across candidate models
+attributable to each term, averaged over series. A term whose values are nearly
+identical across candidates cannot change the winner regardless of its weight;
+a term with large spread can decide the ranking even at small weight. Speed
+carries one quarter of RMSE's nominal weight yet exerts between 12 and 25 times
+its influence. $R^2$ is the only term never divided by a normalization
+denominator, which is why its influence grows at finer granularity where $R^2$
+varies most widely.
+\end{minipage}
+\end{table}

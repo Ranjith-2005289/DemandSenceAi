@@ -54,6 +54,35 @@ ML_TIMEOUT   = 180     # ML models (reduced from 240)
 DL_TIMEOUT   = 120     # DL models (reduced from 600 — skip if too slow)
 MAX_WORKERS  = 8       # threads (I/O-bound; GIL released by numpy/torch)
 
+# ── Model ranking policy ──────────────────────────────────────────────────────
+# Models are ranked by cross-validated RMSE, optionally restricted to those that
+# fit a training-time budget.
+#
+# This replaced a six-term weighted score
+# (0.40*RMSE + 0.20*MAE + 0.20*MAPE + 0.10*stability + 0.10*speed - 0.10*R2),
+# which was benchmarked against held-out data on 480 M5 series across four
+# aggregation levels and lost to cross-validated RMSE alone at every one of them
+# (p=2.1e-7 at store x department, p=3.6e-6 at item level). The defect was
+# structural, not a bad choice of weights. Every term was divided by its own
+# Tukey fence, which bounds the DENOMINATOR but not the RATIO: training time
+# spans six orders of magnitude across this registry (MovingAverage ~5e-5s vs
+# SARIMA ~118s) while RMSE spans a factor of roughly 1.2, so normalized speed
+# reached 43 while normalized RMSE stayed inside 0.5-1.0. At a nominal weight of
+# 0.10 the speed term therefore decided 63-88% of selections, and the models it
+# pushed out (SARIMA/SARIMAX) were the ones that generalized best out-of-sample.
+# R2 compounded it, being the only term never normalized at all.
+#
+# SELECTION_TIME_BUDGET_SEC defaults to None — ranking by accuracy alone —
+# because the useful budget is dataset-dependent and cannot be inferred at
+# request time. Constraining to ~1.5s beat unconstrained selection by about 5%
+# MASE on fine-grained series (item and item-store levels: 5/5 folds, 95% CI
+# excluding zero, stable across seeds), but the same budget is WORSE than no
+# budget on coarse aggregates, where nested selection instead chose a bound so
+# loose it was equivalent to no constraint. Accuracy-only ranking is the setting
+# that measured better than the old score at every level, so it is the default;
+# set a budget explicitly when deployment latency actually matters.
+SELECTION_TIME_BUDGET_SEC: float | None = None
+
 # Deep learning sequence models (30-step lookback here) need enough distinct
 # training windows to learn real patterns rather than overfit noise — they
 # reliably underperform simpler statistical/ML models on small datasets. This
@@ -348,7 +377,7 @@ def run_all_models(
         # whatever's still actually running.
         executor.shutdown(wait=False, cancel_futures=True)
 
-    # ── Calculate Multi-Criteria Weighted Score ──
+    # ── Rank models (see SELECTION_TIME_BUDGET_SEC above) ──
     from services.metrics import get_stability_penalty
 
     def _robust_scale(values):
@@ -358,16 +387,17 @@ def run_all_models(
         capping in preprocessor.py) instead of the raw max.
 
         Why: a single catastrophically bad model (e.g. SARIMA/SARIMAX fitting
-        terribly on an irregular dataset, RMSE in the hundreds of millions
-        vs. everyone else in the hundreds of thousands) would otherwise
-        become the denominator for ALL models. That squashes every other
-        model's normalized RMSE/MAE/MAPE down to near-zero noise, so the
-        80%-weighted accuracy terms stop differentiating between the good
-        models at all and the ranking gets decided by the remaining 20%
-        (speed/R²) almost by accident — confirmed: this is exactly how a
-        model with a *worse* raw RMSE than another still won "best model."
+        terribly on an irregular dataset, RMSE in the hundreds of millions vs.
+        everyone else in the hundreds of thousands) would otherwise become the
+        denominator for ALL models, squashing every other model's normalized
+        error into near-zero noise where they stop being distinguishable.
         Outlier models still land above this fence (ratio > 1, correctly
         penalized) — they just can't set the scale for everyone else.
+
+        Note this bounds the DENOMINATOR, not the resulting ratio. That was
+        survivable for RMSE, whose spread across the registry is small, but it
+        is exactly what broke the old multi-criteria score once training time —
+        spanning six orders of magnitude — was fed through the same treatment.
         """
         finite = [v for v in values if np.isfinite(v)]
         if not finite:
@@ -377,63 +407,94 @@ def run_all_models(
         fence = q3 + 1.5 * (q3 - q1)
         return float(fence) if fence > 1e-6 else float(arr.max()) or 1e-6
 
+    def _is_scorable(r: dict) -> bool:
+        return (r["status"] == "success"
+                and r.get("forecast") is not None
+                and len(r.get("forecast", [])) > 0)
+
+    def _train_cost(r: dict) -> float:
+        """Seconds spent fitting. Falls back to wall-clock when a model doesn't
+        report train_time_sec separately."""
+        return float(r.get("train_time_sec", r.get("elapsed_sec", 0.0)) or 0.0)
+
     try:
         last_val = float(series.iloc[-1])
         hist_std = max(float(series.std()), 1e-6)
 
-        valid_results = [r for r in results if r["status"] == "success" and r.get("forecast") is not None and len(r.get("forecast", [])) > 0]
+        valid_results = [r for r in results if _is_scorable(r)]
 
         if valid_results:
-            max_rmse  = _robust_scale([r.get("rmse", 0) for r in valid_results])
-            max_mae   = _robust_scale([r.get("mae", 0) for r in valid_results])
-            max_mape  = _robust_scale([r.get("mape", 0) for r in valid_results])
-            max_train = _robust_scale([r.get("train_time_sec", 0) for r in valid_results])
-            max_pred  = _robust_scale([r.get("pred_time_sec", 0) for r in valid_results])
+            max_rmse = _robust_scale([r.get("rmse", 0) for r in valid_results])
 
-            # First pass for stability to get the normalization scale
-            stabs = []
+            # Stability is still computed and reported — it's genuinely useful
+            # diagnostic information — but it no longer influences the ranking.
+            # Its discontinuity term |forecast[0] - last_actual| penalizes a
+            # model for failing to anchor to the final observation, which
+            # rewards persistence-like forecasts over statistical ones; on the
+            # M5 benchmark it consistently pushed against SARIMA/SARIMAX, the
+            # models that actually generalized best.
             for r in valid_results:
                 try:
-                    fc = list(r["forecast"])  # ensure plain list, never numpy array
-                    stab = get_stability_penalty(last_val, hist_std, fc)
+                    stab = get_stability_penalty(last_val, hist_std, list(r["forecast"]))
                 except Exception:
-                    stab = float('inf')
-                r["_raw_stab"] = stab
-                stabs.append(stab)
-            max_stab = _robust_scale(stabs)
+                    stab = float("inf")
+                r["stability_penalty"] = (
+                    round(float(stab), 4) if np.isfinite(stab) else float("inf"))
+
+            normalized = {id(r): float(r.get("rmse", 0)) / max_rmse for r in valid_results}
+            finite_norms = [v for v in normalized.values() if np.isfinite(v)]
+
+            # Over-budget models must rank below every affordable one. A fixed
+            # constant can't guarantee that — a catastrophically bad model can
+            # sit far above the Tukey fence (SARIMA at ~823M RMSE against a
+            # field in the hundreds of thousands) — so the offset is derived
+            # from the observed spread instead.
+            over_budget_offset = (max(finite_norms) + 1.0) if finite_norms else 1.0
+
+            affordable = (
+                [r for r in valid_results if _train_cost(r) <= SELECTION_TIME_BUDGET_SEC]
+                if SELECTION_TIME_BUDGET_SEC is not None else valid_results
+            )
+            budget_active = bool(SELECTION_TIME_BUDGET_SEC is not None and affordable)
+            affordable_ids = {id(r) for r in affordable}
+
+            if SELECTION_TIME_BUDGET_SEC is not None and not affordable:
+                # Nothing fits. Mirrors the benchmarked policy exactly: fall
+                # back to the cheapest model, since the caller asked for a
+                # latency bound and this is the closest it can be honoured.
+                # Unreachable with the current registry — MovingAverage and KNN
+                # fit in microseconds — and `n_fallback` was 0 for every budget
+                # at every aggregation level tested.
+                cheapest = min(valid_results, key=_train_cost)
+                logger.warning(
+                    f"[SELECTION] No model trained within {SELECTION_TIME_BUDGET_SEC}s; "
+                    f"falling back to the cheapest ({cheapest['model_name']}, "
+                    f"{_train_cost(cheapest):.4f}s)."
+                )
+                affordable_ids = {id(cheapest)}
+                budget_active = True
 
             for r in results:
-                if r["status"] == "success" and r.get("forecast") is not None and len(r.get("forecast", [])) > 0:
-                    n_rmse = r.get("rmse", 0) / max_rmse
-                    n_mae  = r.get("mae", 0) / max_mae
-                    n_mape = r.get("mape", 0) / max_mape
-                    
-                    t_train = r.get("train_time_sec", r.get("elapsed_sec", 0))
-                    t_pred  = r.get("pred_time_sec", 0)
-                    speed   = (t_train / max_train + t_pred / max_pred) / 2
-                    
-                    stability = r["_raw_stab"] / max_stab
-                    r2 = r.get("r2", 0)
-                    
-                    final_score = (
-                        0.40 * n_rmse +
-                        0.20 * n_mae +
-                        0.20 * n_mape +
-                        0.10 * stability +
-                        0.10 * speed -
-                        0.10 * r2
-                    )
-                    
-                    r["adjusted_score"] = round(float(final_score), 4)
-                    r["stability_penalty"] = round(float(r["_raw_stab"]), 4)
-                    del r["_raw_stab"]
-                else:
+                if not _is_scorable(r):
                     r["adjusted_score"] = float("inf")
+                    continue
+                score = normalized[id(r)]
+                within = (not budget_active) or (id(r) in affordable_ids)
+                if not within:
+                    score += over_budget_offset
+                r["within_time_budget"] = bool(within)
+                r["adjusted_score"] = round(float(score), 6)
+
+            if budget_active:
+                logger.info(
+                    f"[SELECTION] Time budget {SELECTION_TIME_BUDGET_SEC}s: "
+                    f"{len(affordable_ids)}/{len(valid_results)} models eligible."
+                )
         else:
             for r in results:
                 r["adjusted_score"] = float("inf")
     except Exception as e:
-        logger.error(f"Error calculating weighted scores: {e}")
+        logger.error(f"Error ranking models: {e}", exc_info=True)
         for r in results:
             r["adjusted_score"] = float("inf")
 
