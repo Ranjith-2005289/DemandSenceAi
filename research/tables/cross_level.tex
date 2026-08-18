@@ -1,0 +1,41 @@
+\begin{table*}[!t]
+\caption{Realized Held-Out Error by Selection Policy and Aggregation Level (Median MASE; Lower is Better)}
+\label{tab:cross-level}
+\centering
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+\textbf{Selection policy} & \textbf{L3} ($n{=}10$) & \textbf{L5} ($n{=}7$) & \textbf{L9} ($n{=}70$) & \textbf{L10} ($n{=}200$) & \textbf{L12} ($n{=}200$) \\
+\midrule
+Oracle (unachievable floor)              & 0.840 & 0.722 & 0.785 & 0.540 & 0.571 \\
+\midrule
+Cross-validated MAE only                 & \textbf{0.930} & \textbf{0.960} & \textbf{0.892} & \textbf{0.661} & \textbf{0.676} \\
+Cross-validated RMSE only \emph{(baseline)} & 0.947 & 0.960 & 0.909 & 0.693 & 0.695 \\
+Always Prophet                           & 0.973 & 0.895 & 0.949 & 0.743 & 0.695 \\
+Always ARIMA                             & 1.126 & 1.198 & 1.068 & 0.681 & 0.692 \\
+Seasonal naive                           & 0.973 & 1.087 & 1.051 & 0.752 & 0.766 \\
+\midrule
+\textbf{Composite score} (Eq.~\ref{eq:composite-score}) & 1.264 & 1.695 & 1.183 & 0.773 & 0.774 \\
+Naive (last value)                       & 2.298 & 2.046 & 1.598 & 0.954 & 0.876 \\
+\midrule
+\multicolumn{6}{@{}l@{}}{\textit{Composite vs.\ cross-validated RMSE, pairwise over series:}} \\
+\quad Wins--losses                       & 2--5 & 2--5 & 11--50 & 52--117 & 71--97 \\
+\quad $p_{\text{holm}}$                  & 1.00 & 1.00 & $2.1\times10^{-7}$ & $3.6\times10^{-6}$ & 0.079 \\
+\midrule
+\multicolumn{6}{@{}l@{}}{\textit{Omnibus test across all policies:}} \\
+\quad Friedman $\chi^2$                  & 44.6 & 26.9 & 295.2 & --- & --- \\
+\quad $p$                                & $1.1\times10^{-6}$ & $1.4\times10^{-3}$ & $2.7\times10^{-58}$ & --- & --- \\
+\bottomrule
+\end{tabular}
+\vspace{2pt}
+\begin{minipage}{\textwidth}
+\footnotesize
+MASE below 1.0 indicates a forecast better than the in-sample seasonal-naive benchmark. Medians are reported because the
+per-series MASE distribution is right-skewed; bold marks the best achievable policy at each level, excluding the oracle.
+Cross-validated RMSE is retained as the comparison baseline throughout this paper because it is the conventional
+single-metric choice, but MAE-based selection is comparable or marginally better at every level---the substantive finding
+is that the composite loses to \emph{either} single accuracy metric, not to RMSE specifically. Levels~3 and~5 are
+underpowered by construction ($n=10$ and $n=7$ exhaust the available stores and departments); their $p$-values are
+reported for completeness but support no inference. Pairwise comparisons use Wilcoxon signed-rank tests with Holm
+correction across the policy family~\cite{demsar2006statistical}.
+\end{minipage}
+\end{table*}

@@ -29,5 +29,69 @@ backend/session_data/chat/*
 # RAG vector store — regenerated automatically on first run (see rag_service.py)
 backend/.chroma/
 
+# Benchmark outputs (benchmarks/selection_benchmark.py, benchmarks/m5_ingest.py).
+# Regenerable from the raw records, and the M5 source data is far too large to
+# version. The *.raw.json files are the durable artifacts — they hold every
+# per-series record, so any re-analysis (new weights, policies, metrics) runs
+# from them without retraining. Back those up outside git if you want to keep
+# a published result reproducible.
+backend/results_*.csv
+backend/results_*.json
+backend/cfg_*.csv
+backend/cfg_*.json
+backend/con_*.csv
+backend/con_*.json
+backend/norm_*.csv
+backend/norm_*.json
+backend/diagnostic_*.csv
+backend/diagnostic_*.json
+backend/d_raw.*
+backend/d_clipped.*
+backend/d_balanced.*
+backend/ex_*.csv
+backend/ex_*.json
+backend/get_*stats*.py
+backend/data/
+m5-forecasting-accuracy/
+
 # OS
 .DS_Store
+
+# M5 benchmark raw results (large files, re-runnable)
+backend/results_l*.raw.json
+backend/results_l*.weights.csv
+backend/data/
+backend/results_l*.csv
+backend/results_l*.stats.json
+backend/diagnostic_*.csv
+backend/diagnostic_*.stats.json
+backend/diagnostic_*.terms.csv
+backend/diagnostic_*.disagreement.csv
+backend/diagnostic_*.frontier.csv
+backend/diagnostic_*.configs.csv
+backend/diagnostic_*.config_folds.csv
+backend/cfg_*.csv
+backend/cfg_*.stats.json
+backend/cfg_*.config_folds.csv
+backend/cfg_*.configs.csv
+backend/con_*.csv
+backend/con_*.stats.json
+backend/con_*.disagreement.csv
+backend/con_*.frontier.csv
+backend/d_*.csv
+backend/d_*.stats.json
+backend/d_*.terms.csv
+backend/ex_*.csv
+backend/ex_*.stats.json
+backend/ex_*.terms.csv
+backend/norm_*.csv
+backend/norm_*.stats.json
+backend/results_smoke.*
+backend/get_*.py
+backend/level_sweep.log
+backend/full_run*.log
+backend/results_l10.log
+
+# Benchmark final outputs (re-runnable from raw.json)
+backend/final_*.csv
+backend/final_*.json

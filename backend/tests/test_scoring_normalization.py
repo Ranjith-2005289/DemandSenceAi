@@ -65,8 +65,15 @@ def test_outlier_does_not_flatten_ranking_among_good_models():
     good_results = {r["model_name"]: r for r in results if r["model_name"] not in ("SARIMA", "SARIMAX")}
     assert good_results["TCN"]["adjusted_score"] < good_results["KNN"]["adjusted_score"]
 
-    # And the scores among good models must not be near-identical (that
-    # would indicate the normalization denominator is still being set by
-    # the outlier).
-    good_scores = [r["adjusted_score"] for r in good_results.values()]
-    assert max(good_scores) - min(good_scores) > 0.01
+    # The non-outlier models must remain strictly ORDERED by their real RMSE.
+    # (This previously asserted an absolute score gap > 0.01, which only passed
+    # because the old six-term score added an R2 term whose value for the
+    # catastrophic models was ~1.5e6 — so the gap being measured came from R2,
+    # not from RMSE normalization. Ranking by cross-validated RMSE makes the
+    # correct property directly checkable: order, not magnitude.)
+    by_rmse = sorted(good_results.values(), key=lambda r: r["rmse"])
+    scores_in_rmse_order = [r["adjusted_score"] for r in by_rmse]
+    assert scores_in_rmse_order == sorted(scores_in_rmse_order), (
+        "ranking no longer tracks RMSE among the non-outlier models")
+    assert len(set(scores_in_rmse_order)) == len(scores_in_rmse_order), (
+        "non-outlier models collapsed to identical scores")

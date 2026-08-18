@@ -1,0 +1,31 @@
+\begin{table}[!t]
+\caption{Accuracy--Latency Frontier at Level 12 ($n{=}200$)}
+\label{tab:frontier}
+\centering
+\begin{tabular}{@{}rrrr@{}}
+\toprule
+\textbf{Budget (s)} & \textbf{Mean MASE} & \textbf{Mean CV RMSE} & \textbf{Mean cost (s)} \\
+\midrule
+0.01      & 0.748 & 12.544 & 0.0002 \\
+0.10      & 0.745 & 12.513 & 0.004 \\
+0.50      & 0.745 & 12.006 & 0.277 \\
+1.00      & 0.716 & 11.839 & 0.519 \\
+\textbf{2.00} & \textbf{0.698} & 11.724 & 0.925 \\
+5.00      & 0.717 & 11.112 & 1.980 \\
+10.00     & 0.733 & 10.781 & 3.383 \\
+30.00     & 0.736 & 10.576 & 7.358 \\
+$\infty$  & 0.735 & 10.562 & 10.843 \\
+\bottomrule
+\end{tabular}
+\vspace{2pt}
+\begin{minipage}{\columnwidth}
+\footnotesize
+Mean CV RMSE---the quantity the selector minimizes---decreases monotonically as
+the budget relaxes, confirming the selection rule behaves correctly. Realized
+MASE does not: it reaches a minimum near 2~seconds and degrades thereafter.
+Admitting the models with the lowest cross-validated error worsens out-of-sample
+accuracy, so the budget operates as regularization against validation-fold
+overfitting. The minimum uses 8.5\% of the computation required by unconstrained
+selection while achieving 5\% lower error.
+\end{minipage}
+\end{table}
