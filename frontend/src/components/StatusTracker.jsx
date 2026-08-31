@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react";
+import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
+import { Check, CheckCircle2, Loader2 } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 export default function StatusTracker({ status, results }) {
   const [steps, setSteps] = useState({
@@ -12,7 +15,6 @@ export default function StatusTracker({ status, results }) {
   // Simulate step completion timing based on whether results are available
   useEffect(() => {
     if (!results) {
-      // Reset if results cleared
       setSteps({
         upload: false,
         preprocessing: false,
@@ -53,22 +55,26 @@ export default function StatusTracker({ status, results }) {
   }, [results]);
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-      <h2 className="text-lg font-semibold text-slate-900">Forecast Progress</h2>
-
-      <div className="mt-6 space-y-4">
+    <Card className="shadow-sm border border-slate-200 overflow-hidden">
+      {/* Custom Header */}
+      <div className="px-7 pt-6 pb-5 border-b border-slate-100 bg-white">
+        <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Status</p>
+        <p className="mt-1 text-sm font-semibold text-slate-900">Forecast Progress</p>
+      </div>
+      
+      <CardContent className="px-7 py-6 space-y-4 bg-white">
         {/* Step 1: Upload */}
         <StepIndicator
           label="Upload Complete"
           completed={steps.upload}
-          icon={steps.upload ? "✓" : "1"}
+          icon={steps.upload ? <Check className="h-4 w-4" /> : "1"}
         />
 
         {/* Step 2: Preprocessing */}
         <StepIndicator
           label="Preprocessing Data"
           completed={steps.preprocessing}
-          icon={steps.preprocessing ? "✓" : "2"}
+          icon={steps.preprocessing ? <Check className="h-4 w-4" /> : "2"}
           disabled={!steps.upload}
         />
 
@@ -87,29 +93,17 @@ export default function StatusTracker({ status, results }) {
               steps.training.prophet &&
               steps.training.xgboost &&
               steps.training.rf
-                ? "✓"
+                ? <Check className="h-4 w-4" />
                 : "3"
             }
             disabled={!steps.preprocessing}
             showSubSteps
           >
             <div className="mt-3 space-y-2 pl-7">
-              <ModelTrainingRow
-                model="ARIMA"
-                completed={steps.training.arima}
-              />
-              <ModelTrainingRow
-                model="Prophet"
-                completed={steps.training.prophet}
-              />
-              <ModelTrainingRow
-                model="XGBoost"
-                completed={steps.training.xgboost}
-              />
-              <ModelTrainingRow
-                model="RandomForest"
-                completed={steps.training.rf}
-              />
+              <ModelTrainingRow model="ARIMA" completed={steps.training.arima} />
+              <ModelTrainingRow model="Prophet" completed={steps.training.prophet} />
+              <ModelTrainingRow model="XGBoost" completed={steps.training.xgboost} />
+              <ModelTrainingRow model="RandomForest" completed={steps.training.rf} />
             </div>
           </StepIndicator>
         </div>
@@ -118,7 +112,7 @@ export default function StatusTracker({ status, results }) {
         <StepIndicator
           label="Selecting Best Model"
           completed={steps.selection}
-          icon={steps.selection ? "✓" : "4"}
+          icon={steps.selection ? <Check className="h-4 w-4" /> : "4"}
           disabled={
             !steps.training.arima ||
             !steps.training.prophet ||
@@ -131,38 +125,32 @@ export default function StatusTracker({ status, results }) {
         <StepIndicator
           label="Generating Forecast"
           completed={steps.forecast}
-          icon={steps.forecast ? "✓" : "5"}
+          icon={steps.forecast ? <Check className="h-4 w-4" /> : "5"}
           disabled={!steps.selection}
         />
 
         {/* Final status message */}
         {steps.forecast && (
-          <div className="mt-6 rounded-lg border border-green-200 bg-green-50 p-3">
-            <p className="text-sm font-medium text-green-900">✓ Forecast Ready</p>
-            <p className="mt-1 text-xs text-green-800">
+          <Alert className="mt-6 border-green-200 bg-green-50 shadow-sm">
+            <CheckCircle2 className="h-4 w-4 text-green-600 mt-1" />
+            <AlertTitle className="text-green-900 font-bold">Forecast Ready</AlertTitle>
+            <AlertDescription className="text-green-800">
               All steps completed successfully. Review results below.
-            </p>
-          </div>
+            </AlertDescription>
+          </Alert>
         )}
-      </div>
+      </CardContent>
 
       {/* Current status text */}
-      <div className="mt-4 border-t border-slate-200 pt-3">
-        <p className="text-xs font-medium uppercase text-slate-600">Current Status</p>
-        <p className="mt-1 text-sm text-slate-700">{status || "Idle"}</p>
+      <div className="px-7 py-5 border-t border-slate-100 bg-slate-50">
+        <p className="text-xs font-medium uppercase text-slate-500">Current Status</p>
+        <p className="mt-1 text-sm font-medium text-slate-700">{status || "Idle"}</p>
       </div>
-    </section>
+    </Card>
   );
 }
 
-function StepIndicator({
-  label,
-  completed,
-  icon,
-  disabled,
-  showSubSteps,
-  children,
-}) {
+function StepIndicator({ label, completed, icon, disabled, showSubSteps, children }) {
   return (
     <div>
       <div className="flex items-start gap-3">
@@ -190,7 +178,7 @@ function StepIndicator({
             {label}
           </p>
           {completed && (
-            <p className="mt-0.5 text-xs text-green-600">Completed</p>
+            <p className="mt-0.5 text-xs font-medium text-green-600">Completed</p>
           )}
         </div>
       </div>
@@ -214,9 +202,10 @@ function ModelTrainingRow({ model, completed }) {
       >
         {model}
       </span>
-      {completed && <span className="text-xs text-green-600">✓</span>}
-      {!completed && (
-        <span className="ml-auto h-2 w-8 animate-pulse rounded-full bg-blue-300" />
+      {completed ? (
+        <Check className="h-3 w-3 text-green-600 ml-1" />
+      ) : (
+        <Loader2 className="ml-auto h-3 w-3 animate-spin text-blue-400" />
       )}
     </div>
   );
