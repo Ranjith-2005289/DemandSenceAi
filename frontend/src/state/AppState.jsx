@@ -97,6 +97,11 @@ export function AppStateProvider({ children }) {
       groupCol: config.groupCol || null,
       country: config.country || null,
       horizon: Number(config.horizon) || 30,
+      // Detected price/promo columns, used by XGBoost, Random Forest and SARIMAX.
+      featureCols: [
+        ...(upload.detected?.exog_columns?.price_cols || []),
+        ...(upload.detected?.exog_columns?.promo_cols || []),
+      ],
     };
     const startedAt = Date.now();
     setRun({ status: "running", error: null, startedAt, finishedAt: null });
@@ -109,7 +114,8 @@ export function AppStateProvider({ children }) {
         null,
         null,
         meta.country,
-        sessionId
+        sessionId,
+        meta.featureCols
       );
       stopReportPoll();
       hasResult.current = true;
@@ -152,7 +158,8 @@ export function AppStateProvider({ children }) {
           runMeta.groupCol,
           value,
           runMeta.country,
-          sessionId
+          sessionId,
+          runMeta.featureCols
         );
         setGroupResult(res);
         return true;

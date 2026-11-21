@@ -32,7 +32,8 @@ export const runForecast = async (
   group_col = null,
   group_value = null,
   country = null,
-  session_id = null
+  session_id = null,
+  feature_cols = null
 ) => {
   const payload = {
     filename,
@@ -42,6 +43,7 @@ export const runForecast = async (
     ...(group_col ? { group_col, group_value } : {}),
     ...(country ? { country } : {}),
     ...(session_id ? { session_id } : {}),
+    ...(feature_cols?.length ? { feature_cols } : {}),
   };
   const { data } = await api.post("/forecast", payload);
   return data;
