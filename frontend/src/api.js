@@ -100,3 +100,8 @@ export const askChat = async ({ question, session_id, forecast_data, product_sum
 };
 
 export const resetChat = (session_id) => api.post(`/api/chat/reset/${session_id}`);
+
+export const getHealth = async () => {
+  const { data } = await api.get("/health", { timeout: 5000 });
+  return data;
+};

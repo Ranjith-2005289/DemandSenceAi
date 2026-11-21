@@ -59,3 +59,38 @@ export const MODEL_LABEL = {
 export const modelLabel = (name) => MODEL_LABEL[name] || name;
 
 export const MODEL_COUNT = Object.keys(MODEL_CATEGORY).filter((m) => m !== "Ensemble").length;
+
+/** "2026-01-12" → "12 Jan 2026" (dates without a time are treated as calendar dates). */
+export function fmtDate(v) {
+  if (!v) return "—";
+  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T00:00:00` : v);
+  if (Number.isNaN(d.getTime())) return String(v);
+  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
+/** Signed percentage from a ratio, e.g. 0.052 → "+5.2%". */
+export function fmtSignedPct(v, digits = 1) {
+  if (!isNum(v)) return "—";
+  const s = (v * 100).toFixed(digits);
+  return `${v > 0 ? "+" : ""}${s}%`;
+}
+
+/** Backend sends "daily", "weekly (estimated)", "unknown"… */
+export const freqLabel = (f) => (!f || f === "unknown" ? "—" : String(f).charAt(0).toUpperCase() + String(f).slice(1));
+
+// Holiday calendars offered in the UI (codes from the `holidays` package).
+export const COUNTRY_NAMES = {
+  US: "United States", GB: "United Kingdom", IN: "India", CA: "Canada", AU: "Australia",
+  DE: "Germany", FR: "France", BR: "Brazil", MX: "Mexico", JP: "Japan", CN: "China",
+  SG: "Singapore", AE: "United Arab Emirates", ZA: "South Africa", NZ: "New Zealand",
+};
+export const countryLabel = (code) => COUNTRY_NAMES[code] || code;
+
+/** Short axis label: "12 Jan" / "Jan 12" depending on locale. */
+export function fmtShortDate(v) {
+  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T00:00:00` : v);
+  if (Number.isNaN(d.getTime())) return String(v);
+  return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+export const fmtShare = (v) => (isNum(v) ? `${v.toFixed(1)}%` : "—");
