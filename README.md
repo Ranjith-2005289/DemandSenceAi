@@ -2,15 +2,44 @@
 
 **A full-stack, multi-model time-series forecasting system with a RAG-grounded LLM explanation layer.**
 
-Version: `0.1.0` (FastAPI app version, see `backend/main.py`) · Status: capstone project, functionally complete, not production-hardened (see [§19 Security](#19-security) and [§27 Limitations](#27-limitations))
+Version: `0.2.0` (FastAPI app version, see `backend/main.py`) · Status: capstone project, functionally complete, not production-hardened (see [§19 Security](#19-security) and [§27 Limitations](#27-limitations))
 
 ---
 
 ## 1. Project Title
 
 - **Name:** DemandSense AI
-- **One-line description:** Upload any time-series dataset (retail, stock, energy, IoT) and get 19 forecasting models trained in parallel, automatically ranked by a defensible composite score, explained through a RAG-grounded chatbot and an AI-generated business report.
+- **One-line description:** Upload any time-series dataset (retail, stock, energy, IoT) and get 15 forecasting models plus a top-3 ensemble trained in parallel, all scored on the same held-out backtest windows and ranked by MASE, explained through a RAG-grounded chatbot and an AI-generated business report.
 - **Version:** `0.1.0`
+
+---
+
+## What changed in v0.2
+
+**Model registry: 8 removed, 4 added, 1 ensemble.** Every model was benchmarked on held-out data: 10 series (5 real uploads, 5 synthetic with known structure), each model trained without its last 28 points (13 for short series) and scored on them by MASE, where < 1 means it beat a seasonal-naive forecast.
+
+| Removed | Held-out geo-mean MASE | Why |
+|---|---|---|
+| Transformer, LSTM, CNN1D, BiLSTM, GRU, TCN, RNN | 1.35 – 1.68 | All **worse than seasonal naive (1.17)** and the slowest models in the registry |
+| KNN | 1.165 | Worst ML model (mean rank 11.3); no better than naive |
+
+Added: **Theta** (M3 competition winner), **AutoETS** (state-space ETS, form chosen by AICc), **MSTL** (multiple seasonalities, e.g. weekly + yearly in daily data), **SeasonalNaive** (the honest baseline), and an **Ensemble**, the equal-weight mean of the top 3 models.
+
+**Common backtest selection.** Models used to be ranked on their own internal CV numbers, which were not comparable: XGBoost/RandomForest/SVM/ARIMA scored *one-step-ahead* errors (true lags fed in at each test step), while Holt-Winters/Prophet/Croston scored genuine multi-step forecasts. Now every model is refit from the same 2 forecast origins and forecasts the same unseen windows multi-step, and the ranking uses MASE on those windows. Internal CV metrics are still returned as `internal_cv`. 95% intervals are calibrated on each model's own backtest errors (`interval_method: "backtest_calibrated"`).
+
+**Result** (same 10 series, the pipeline's chosen model scored on the held-out tail):
+
+| Selection policy | Geo-mean MASE |
+|---|---|
+| **v0.2: common backtest + ensemble** | **0.765** |
+| Old rule (lowest internal-CV RMSE), same models | 0.862 |
+| Seasonal naive | 1.169 |
+
+**Speed.** Models now run in a persistent **process** pool. statsmodels holds the GIL, so the old thread pool ran models essentially one at a time. A 731-row daily series went from ~100s to ~20s, including the backtest refits.
+
+**End-to-end fixes.** Excel/JSON uploads are saved as normalized CSV (they previously failed at `/forecast`). A single failed model no longer turns `/forecast` into a 500 (non-finite floats are sanitized). The leaderboard renders (it was passed the wrong props). A failed forecast returns to the form with its error, instead of hanging on the progress screen. The insights page polls the backend URL and shows all 5 report sections. The chatbot's context marks the model the system actually selected. The RAG index re-embeds edited knowledge-base files.
+
+> Sections below that describe the six-term composite score, the DL row-count gate or the 19-model registry document the earlier design and are kept for the project record.
 
 ---
 
@@ -20,7 +49,7 @@ Version: `0.1.0` (FastAPI app version, see `backend/main.py`) · Status: capston
 
 **Why was it developed?** As a capstone project (PES University, Department of Computer Science and Engineering) to build — and rigorously validate — a system that trains a broad ensemble of forecasting approaches (statistical, classical ML, deep learning, intermittent-demand) side by side, uses an auditable multi-criteria score (not just RMSE) to pick a winner, and constrains its LLM layer to never contradict the system's own deterministic numbers.
 
-**Who are the target users?** Retail/operations analysts and managers who have a sales/demand CSV or Excel export and want a forecast plus a plain-language explanation, without needing to know which of 19 algorithms to pick or how to interpret RMSE vs. MAPE themselves.
+**Who are the target users?** Retail/operations analysts and managers who have a sales/demand CSV or Excel export and want a forecast plus a plain-language explanation, without needing to know which of 15 algorithms to pick or how to interpret RMSE vs. MAPE themselves.
 
 **Real-world use case:** A store manager uploads a `Weekly_Sales.csv`, gets a 30-day (or custom horizon) forecast with confidence bands, a per-product/store ranked breakdown with trend labels, a stockout-risk scan, and can ask the built-in chatbot "why did XGBoost win?" or "how do I reduce stockouts for Product X?" in plain English.
 
@@ -31,7 +60,7 @@ Version: `0.1.0` (FastAPI app version, see `backend/main.py`) · Status: capston
 ## 3. Features
 
 **Core forecasting**
-- **19 forecasting models** trained concurrently and ranked by a composite score (not just RMSE) — see [§15](#15-ai--machine-learning-module).
+- **15 forecasting models + a top-3 ensemble**, trained in parallel worker processes and ranked on a **common multi-step holdout backtest** (MASE) — see [What changed in v0.2](#what-changed-in-v02).
 - **Adaptive walk-forward cross-validation** — fold count scales with dataset size (`min(5, max(2, n_obs // 100))`), never a single train/test split.
 - **Real forecast intervals** — every model reports `forecast_lower`/`forecast_upper` derived from its own historical CV error (Random Forest additionally reports genuine tree-variance-based intervals).
 - **Multi-target forecasting** — forecast several numeric columns in one request (`target_cols`), each running independently so one failing target doesn't break the others.
@@ -55,7 +84,6 @@ Version: `0.1.0` (FastAPI app version, see `backend/main.py`) · Status: capston
 **Reliability / honesty guardrails**
 - **Session-isolated forecast cache** — concurrent users/tabs don't overwrite each other's results (in-memory dict + disk mirror per `session_id`).
 - **Outlier-robust model ranking** — Tukey-fence (Q3 + 1.5·IQR) normalization so one catastrophically bad model can't distort the ranking of the rest.
-- **DL row-count gating** — deep learning models are skipped (not trained-and-flagged) below a frequency-aware minimum row count, with the decision surfaced explicitly in the API response.
 - **LLM honesty constraints** — the prompt layer is explicitly instructed not to contradict deterministic system labels or claim capabilities/data the system doesn't have.
 
 **Not present** (see [§27](#27-limitations) for the full list): authentication, rate-limiting, a database, admin roles, notifications, search/filtering UI beyond the results table, hierarchical reconciliation.
@@ -91,10 +119,11 @@ flowchart TB
         SessionStore[session_store.py]
     end
 
-    subgraph Models["19-Model Registry"]
+    subgraph Models["15-Model Registry + Ensemble"]
         Stat[7 Statistical:<br/>ARIMA SARIMA SARIMAX<br/>HoltWinters ExpSmoothing<br/>MovingAverage Prophet]
-        ML[4 Classical ML:<br/>XGBoost RandomForest<br/>KNN SVM]
-        DL[7 Deep Learning:<br/>RNN LSTM GRU BiLSTM<br/>CNN1D TCN Transformer]
+        ML[3 Classical ML:<br/>XGBoost RandomForest SVM]
+        New[Theta AutoETS MSTL<br/>SeasonalNaive baseline]
+        Ens[Ensemble:<br/>mean of top-3 backtested]
         Interm[1 Intermittent:<br/>Croston-SBA]
     end
 
@@ -140,11 +169,11 @@ flowchart TB
 
 **Database:** None. See [§11](#11-database) for the reasoning.
 
-**AI models:** 19 forecasting models (statsmodels/Prophet/scikit-learn/XGBoost/PyTorch) + Google Gemini (`gemini-flash-latest`) for chat/report generation and `gemini-embedding-001` for RAG embeddings, stored in a local ChromaDB instance.
+**AI models:** 15 forecasting models + ensemble (statsmodels/Prophet/scikit-learn/XGBoost) + Google Gemini (`gemini-flash-latest`) for chat/report generation and `gemini-embedding-001` for RAG embeddings, stored in a local ChromaDB instance.
 
 **APIs:** REST/JSON over HTTP, documented in [§13](#13-api-documentation).
 
-**Data flow:** upload → column detection → preprocess → parallel model training → composite scoring → response with leaderboard + winner + real historical data + intervals, optionally followed by chat/insights calls that reuse the same forecast payload.
+**Data flow:** upload → column detection → preprocess → parallel model training + common holdout backtest → MASE ranking + ensemble → response with leaderboard + winner + real historical data + intervals, optionally followed by chat/insights calls that reuse the same forecast payload.
 
 ---
 
@@ -496,6 +525,9 @@ Returns `{"status": "ok", "service": "retail-forecasting-backend"}`. No auth, us
 ---
 
 ## 15. AI / Machine Learning Module
+
+> 📖 **Full Algorithmic Specification & Formal Pseudocode:**  
+> For complete mathematical formulations, step-by-step algorithms, complexity analyses, and formal pseudocode for all 9 logical workflows, see [ALGORITHMS_AND_WORKFLOWS.md](file:///Users/rajkumar/Downloads/capstone2027/retail-forecasting/ALGORITHMS_AND_WORKFLOWS.md) and Section 5 of [README_PHASE2.md](file:///Users/rajkumar/Downloads/capstone2027/retail-forecasting/README_PHASE2.md#5-algorithms-used-and-logical-workflow-pseudocode).
 
 ### Dataset
 No fixed dataset ships with the app — the system is dataset-agnostic by design (retail, stock, energy, IoT, healthcare, etc., per the docstrings in `upload.py`/`preprocessor.py`). The accompanying IEEE paper (`research/`) validates the system end-to-end on a real ~1,000-transaction Kaggle-style retail dataset aggregated to a 366-day daily series.

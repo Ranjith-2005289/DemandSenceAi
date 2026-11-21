@@ -463,6 +463,25 @@ async def upload_csv(file: UploadFile = File(...)):
 
     rows, cols = df.shape
 
+    # ── 4b. Persist a normalized CSV ─────────────────────────────────────────
+    # Every downstream endpoint (/forecast, /forecast/product-summary,
+    # /api/insights/generate) reads the saved file back with a plain
+    # pd.read_csv(). Without this step an Excel or JSON upload would succeed
+    # here and then fail at forecast time, and a CSV with a non-default
+    # encoding/separator or padded headers would be re-read with different
+    # column names than the ones this response tells the frontend about.
+    # Writing the cleaned frame as UTF-8, comma-separated CSV makes the file
+    # on disk match exactly what was analysed below.
+    normalized_name = f"{Path(unique_name).stem}.csv"
+    normalized_path = UPLOAD_DIR / normalized_name
+    try:
+        df.to_csv(normalized_path, index=False)
+        if normalized_path != save_path:
+            save_path.unlink(missing_ok=True)
+        unique_name, save_path = normalized_name, normalized_path
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save normalized file: {e}")
+
     # ── 5. Column analysis ────────────────────────────────────────────────────
     date_col_map = _detect_date_columns(df)
     date_col_names = list(date_col_map.keys())

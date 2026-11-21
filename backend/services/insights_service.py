@@ -18,7 +18,9 @@ series for the classic "stockout signature" (flat low plateau -> sharp
 recovery), not a guess. Profit/loss is framed as a revenue/trend signal with
 an explicit caveat that true profit needs cost data this system doesn't have.
 """
+import hashlib
 import json
+import os
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -29,6 +31,40 @@ from services.explainer import _client, CHAT_MODEL, format_forecast_context, for
 from services.llm_retry import call_with_retry
 from services.product_analytics import _trend_for_group, GROWTH_THRESHOLD_PCT
 from services.rag_service import retrieve_relevant_knowledge
+from services.preprocessor import preprocess
+
+
+# Cache directory for insights reports to avoid re-querying LLM for same dataset
+_CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads", ".insights_cache")
+os.makedirs(_CACHE_DIR, exist_ok=True)
+
+
+def _get_cache_key(csv_hash: str, target_col: str, date_col: str) -> str:
+    """Generate cache key from dataset hash and column names."""
+    key_str = f"{csv_hash}|{target_col}|{date_col}"
+    return hashlib.md5(key_str.encode()).hexdigest()
+
+
+def _load_cached_report(cache_key: str) -> Optional[dict]:
+    """Load cached report if it exists, return None if not."""
+    cache_path = os.path.join(_CACHE_DIR, f"{cache_key}.json")
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+    return None
+
+
+def _save_cached_report(cache_key: str, report: dict) -> None:
+    """Save report to cache."""
+    cache_path = os.path.join(_CACHE_DIR, f"{cache_key}.json")
+    try:
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass  # Silently fail — cache is optional
 
 
 def compute_dataset_overview(series: pd.Series) -> dict:
@@ -178,11 +214,13 @@ def generate_ai_report(
     series: pd.Series,
     forecast_result: Dict[str, Any],
     product_summary: Optional[Dict[str, Any]] = None,
+    llm_max_retries: int = 3,
+    llm_base_delay: float = 2.0,
 ) -> dict:
     """
     Runs the deterministic analysis, retrieves grounding knowledge based on
     what was detected, and makes one structured Gemini call to produce the
-    five report sections.
+    five report sections. Tries multiple models if primary fails due to 503.
     """
     overview = compute_dataset_overview(series)
     stockout_alerts = detect_stockout_alerts(series)
@@ -255,19 +293,120 @@ uses data it doesn't, and do not contradict labels it already computed):
 
 Write in clear, business-friendly language for a retail manager, not a data scientist."""
 
-    response = call_with_retry(
-        _client.models.generate_content,
-        model=CHAT_MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=REPORT_SCHEMA,
-        ),
-    )
-    report = json.loads(response.text)
+    # Model fallback chain: prefer the current flash model, then legacy aliases if needed.
+    model_chain = [CHAT_MODEL, "gemini-3.6-flash", "gemini-3.5-flash-lite"]
+    response = None
+    last_error = None
+    
+    for model in model_chain:
+        try:
+            response = call_with_retry(
+                _client.models.generate_content,
+                model=model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=REPORT_SCHEMA,
+                ),
+                max_retries=llm_max_retries,
+                base_delay=llm_base_delay,
+            )
+            report = json.loads(response.text)
+            break  # Success — stop trying other models
+        except Exception as e:
+            last_error = e
+            continue  # Try next model
+    
+    if response is None:
+        # Graceful fallback when ALL models are unavailable (quota, 503, etc.).
+        # Provide deterministic diagnostics and a clear message for the UI
+        # while avoiding a hard failure that breaks the whole endpoint.
+        error_str = str(last_error)
+        
+        # Check for quota exhaustion — provide actionable guidance.
+        if "quota" in error_str.lower() or "429" in error_str:
+            err_msg = (
+                "Gemini API daily quota exceeded for this API key's current plan. "
+                "This is a limit on your Google API key, not an app error. "
+                "Please wait for the daily quota to reset, or upgrade the key's billing plan "
+                "in Google AI Studio (https://aistudio.google.com/apikey)."
+            )
+        else:
+            err_msg = f"AI insights generation temporarily unavailable: {error_str}"
+        
+        report = {
+            "dataset_summary": (
+                "AI insights temporarily unavailable. "
+                "Deterministic dataset overview and stockout alerts are provided below. "
+                + err_msg
+            ),
+            "sales_forecast_summary": (
+                "AI insights temporarily unavailable. See deterministic forecast output in the UI. "
+                + err_msg
+            ),
+            "recommendations": (
+                "AI recommendations unavailable due to service error. "
+                + err_msg
+            ),
+            "profit_loss_analysis": (
+                "AI profit/loss analysis unavailable. Deterministic trend is: "
+                f"{overview.get('trend')}"
+            ),
+            "stock_alerts_summary": _format_stockout_context(stockout_alerts),
+        }
 
     return {
         "dataset_overview": overview,
         "stockout_alerts": stockout_alerts,
         **report,
     }
+
+
+def generate_and_save_report(
+    csv_path: str,
+    date_col: str,
+    target_col: str,
+    forecast_result: Dict[str, Any],
+    product_summary: Optional[Dict[str, Any]],
+    out_path: str,
+    llm_max_retries: int = 15,
+    llm_base_delay: float = 4.0,
+) -> None:
+    """
+    Background worker: read CSV, generate a full AI report with aggressive retries
+    (15 attempts, 4-8s backoff), and persist the JSON output to `out_path` for
+    later retrieval by the UI. Uses exponential backoff tuned for 503 recovery.
+    Checks cache first to avoid re-querying LLM for identical datasets.
+    """
+    try:
+        df = pd.read_csv(csv_path)
+        
+        # Generate cache key from file hash + column names
+        file_hash = hashlib.md5(open(csv_path, 'rb').read()).hexdigest()
+        cache_key = _get_cache_key(file_hash, target_col, date_col)
+        
+        # Check cache first
+        cached_report = _load_cached_report(cache_key)
+        if cached_report:
+            # Found in cache — use it instead of calling LLM
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(cached_report, f, ensure_ascii=False, indent=2)
+            return
+        
+        series, _ = preprocess(df, date_col=date_col, target_col=target_col)
+        report = generate_ai_report(
+            series=series,
+            forecast_result=forecast_result,
+            product_summary=product_summary,
+            llm_max_retries=llm_max_retries,
+            llm_base_delay=llm_base_delay,
+        )
+        # Persist report as JSON
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+        
+        # Cache successful reports for future use
+        _save_cached_report(cache_key, report)
+    except Exception:
+        # Silent failure in background job; the main request already returned.
+        return

@@ -2,22 +2,26 @@ import axios from "axios";
 
 // Set VITE_API_BASE_URL in a .env file (or the host platform's env config)
 // to point at a deployed backend; defaults to the local dev server.
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
-const api = axios.create({
-  baseURL: API_BASE_URL,
-});
+const api = axios.create({ baseURL: API_BASE_URL });
+
+/** Human-readable message from an axios error (FastAPI puts it in `detail`). */
+export function errorMessage(error, fallback = "Something went wrong.") {
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return detail.map((d) => d.msg || JSON.stringify(d)).join("; ");
+  if (error?.code === "ERR_NETWORK") {
+    return `Can't reach the forecasting server at ${API_BASE_URL}. Is the backend running?`;
+  }
+  return error?.message || fallback;
+}
 
 export const uploadCsv = async (formData) => {
-  try {
-    const { data } = await api.post("/upload", formData, {
-      headers: { "Content-Type": "multipart/form-data" },
-    });
-    return data;
-  } catch (error) {
-    console.error("Upload error:", error.response?.data || error.message);
-    throw error;
-  }
+  const { data } = await api.post("/upload", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return data;
 };
 
 export const runForecast = async (
@@ -30,38 +34,17 @@ export const runForecast = async (
   country = null,
   session_id = null
 ) => {
-  console.log("\n🔗 API Layer: runForecast called");
-  console.log("  Parameters:", { filename, date_col, target_col, forecast_horizon, group_col, group_value, country, session_id });
-
-  try {
-    const payload = {
-      filename,
-      date_col,
-      target_col,
-      forecast_horizon,
-      ...(group_col ? { group_col, group_value } : {}),
-      ...(country ? { country } : {}),
-      ...(session_id ? { session_id } : {}),
-    };
-    console.log("  📤 Preparing POST request to /forecast");
-    console.log("  📋 Payload:", JSON.stringify(payload, null, 2));
-    
-    const { data } = await api.post("/forecast", payload);
-    
-    console.log("  ✅ API response received successfully");
-    console.log("  📊 Response status:", data?.status);
-    console.log("  📊 Response data:", data);
-    return data;
-  } catch (error) {
-    console.error("  ❌ Forecast API error");
-    console.error("  Error type:", error?.constructor?.name);
-    console.error("  Error message:", error?.message);
-    console.error("  Response status:", error?.response?.status);
-    console.error("  Response statusText:", error?.response?.statusText);
-    console.error("  Response data:", error?.response?.data);
-    console.error("  Full error:", error);
-    throw error;
-  }
+  const payload = {
+    filename,
+    date_col,
+    target_col,
+    forecast_horizon,
+    ...(group_col ? { group_col, group_value } : {}),
+    ...(country ? { country } : {}),
+    ...(session_id ? { session_id } : {}),
+  };
+  const { data } = await api.post("/forecast", payload);
+  return data;
 };
 
 export const getLatestForecast = async (session_id = null) => {
@@ -100,3 +83,20 @@ export const generateInsightsReport = async (
   });
   return data;
 };
+
+export const getAsyncReportStatus = async (filename) => {
+  const { data } = await api.get("/api/insights/async_report_status", { params: { filename } });
+  return data;
+};
+
+export const askChat = async ({ question, session_id, forecast_data, product_summary }) => {
+  const { data } = await api.post("/api/chat/ask", {
+    question,
+    session_id,
+    forecast_data,
+    product_summary,
+  });
+  return data;
+};
+
+export const resetChat = (session_id) => api.post(`/api/chat/reset/${session_id}`);

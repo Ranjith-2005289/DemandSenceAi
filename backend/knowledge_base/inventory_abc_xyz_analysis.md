@@ -29,7 +29,7 @@ practice:
 
 Practical guidance for a forecasting system: segment the catalog into
 ABC/XYZ first, then match model complexity to the segment. Running a full
-ensemble of statistical, ML, and deep learning models on every single SKU
+ensemble of statistical and ML models on every single SKU
 is often wasted effort for C/Z items; the payoff from better models is
 concentrated in A and X segments where volume and predictability make
 accuracy improvements actually move the bottom line.

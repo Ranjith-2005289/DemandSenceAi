@@ -12,7 +12,7 @@ parameters reliably and generally assume the underlying pattern is fairly
 stable — a sudden structural break (a big pricing change, a new
 competitor) can confuse them until enough post-break data accumulates.
 
-**Tree-based and instance-based ML models (XGBoost, Random Forest, KNN,
+**Tree-based and kernel ML models (XGBoost, Random Forest,
 SVM) on lag/rolling features:** strong at capturing complex, nonlinear
 interactions between lag values, rolling statistics, and calendar
 features — useful when there are many potentially relevant features
@@ -25,7 +25,27 @@ residual) — a plain moving-average or naive baseline can sometimes beat
 these models specifically on strongly trending data unless this
 limitation is addressed.
 
-**Deep learning models (LSTM, GRU, Transformer, TCN, etc.):** can in
+**Theta, AutoETS and MSTL:** the exponential-smoothing / state-space
+family. Theta won the M3 forecasting competition and remains a standard
+strong benchmark; AutoETS chooses its error, trend (including damped
+trend) and seasonal form by AICc; MSTL handles several seasonal cycles at
+once (e.g. weekly AND yearly patterns in daily retail sales), which a
+single-period Holt-Winters cannot. On short-to-medium retail histories
+this family is usually the most accurate.
+
+**Ensemble:** an equal-weight average of the three best models on the
+backtest. Averaging forecasts from different methods cancels part of each
+model's individual error and is one of the most reliable ways to improve
+accuracy — most top entries in the M4 competition were combinations.
+
+**SeasonalNaive:** "same as last season". It is the yardstick MASE is
+measured against; any model with MASE above 1 did worse than it.
+
+**Deep learning models (LSTM, GRU, Transformer, TCN, etc.):** this system
+no longer runs them. On a held-out benchmark all seven deep-learning
+models it previously offered were less accurate on average than a
+seasonal-naive forecast, while being the slowest to train. More
+generally they can in
 principle capture complex temporal patterns, but they're the most
 data-hungry family — with only a few hundred data points they usually
 underperform simpler methods, and their advantage typically only shows up

@@ -3,7 +3,11 @@ from pathlib import Path
 import pandas as pd
 from pydantic import BaseModel
 import logging
+import math
+from functools import partial
 import pickle
+
+import numpy as np
 
 from services.preprocessor import preprocess
 from services.best_model import select_best
@@ -12,6 +16,21 @@ from services.product_analytics import compute_group_summary
 from services import session_store
 
 logger = logging.getLogger(__name__)
+
+
+def _json_safe(obj):
+    """Recursively replace NaN/±inf with None and numpy scalars with Python
+    numbers. Starlette serialises with allow_nan=False, so a single failed
+    model (rmse=inf) used to turn the whole /forecast response into a 500."""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, np.generic):
+        obj = obj.item()
+    if isinstance(obj, float) and not math.isfinite(obj):
+        return None
+    return obj
 
 router = APIRouter(prefix="/forecast", tags=["forecast"])
 
@@ -38,7 +57,7 @@ class ForecastRequest(BaseModel):
     target_col: str | None = None
     target_cols: list[str] | None = None    # Multi-target: forecast each of these independently
     forecast_horizon: int = 30
-    skip_dl: bool = False  # Set True to skip Deep Learning models (faster results)
+    skip_dl: bool = False  # Deprecated no-op: deep-learning models were removed (kept for client compatibility)
     group_col: str | None = None    # Optional: forecast one group instead of the whole dataset
     group_value: str | None = None  # Required if group_col is set
     country: str | None = None      # Optional ISO country code (e.g. "US") for Prophet holiday effects
@@ -119,9 +138,9 @@ def _forecast_single_target(
     if country:
         fn, timeout, category = MODEL_REGISTRY["Prophet"]
         models_override = dict(MODEL_REGISTRY)
-        models_override["Prophet"] = (
-            lambda s, h, _c=country: fn(s, h, country=_c), timeout, category
-        )
+        # functools.partial (not a lambda) so the registry stays picklable
+        # and can run in model_runner's process pool.
+        models_override["Prophet"] = (partial(fn, country=country), timeout, category)
 
     # Same pattern for real exogenous features (price/promo): only
     # XGBoost, RandomForest, and SARIMAX know what to do with them.
@@ -132,8 +151,7 @@ def _forecast_single_target(
         for name in ("XGBoost", "RandomForest", "SARIMAX"):
             fn, timeout, category = MODEL_REGISTRY[name]
             models_override[name] = (
-                lambda s, h, _fn=fn, _e=exog_df, _m=exog_meta: _fn(s, h, exog_df=_e, exog_meta=_m),
-                timeout, category,
+                partial(fn, exog_df=exog_df, exog_meta=exog_meta), timeout, category,
             )
         logger.info(f"[FORECAST] Using exogenous features {list(exog_df.columns)} for XGBoost/RandomForest/SARIMAX")
 
@@ -141,7 +159,7 @@ def _forecast_single_target(
         logger.info(f"[FORECAST] Running models with series length={len(series)}, horizon={forecast_horizon}, skip_dl={skip_dl}, country={country}")
         all_models, model_run_info = run_all_models(
             series, forecast_horizon=forecast_horizon,
-            include_dl=not skip_dl, models=models_override,
+            models=models_override,
         )
         logger.info(f"[FORECAST] Models completed: {len(all_models)} models, results={[m.get('model_name') for m in all_models]}")
         if model_run_info.get("dl_skipped"):
@@ -149,6 +167,12 @@ def _forecast_single_target(
     except Exception as e:
         logger.error(f"[FORECAST] Model execution failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Model execution failed: {e}")
+
+    # Per-origin backtest forecasts are only needed for ranking/ensembling;
+    # drop them so the response (which the frontend echoes back to the chat
+    # and insights endpoints) stays lean.
+    for r in all_models:
+        r.pop("backtest_forecasts", None)
 
     # ── Select best model ───────────────────────────────────────────────────
     try:
@@ -179,7 +203,7 @@ def _forecast_single_target(
     # Real historical series for the frontend's chart — capped to the most
     # recent 365 points (a full year) for legibility/payload size; showing
     # every point of a 300K-row series on a line chart isn't useful anyway.
-    return {
+    return _json_safe({
         "status": "success",
         "target_col": target_col,
         "all_models": all_models,
@@ -196,7 +220,7 @@ def _forecast_single_target(
             "values": [float(v) for v in series.values[-365:]],
         },
         "exog_features_used": list(exog_df.columns) if exog_df is not None and not exog_df.empty else [],
-    }
+    })
 
 
 @router.post("")

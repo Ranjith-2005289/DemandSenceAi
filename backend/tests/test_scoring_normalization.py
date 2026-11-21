@@ -50,7 +50,7 @@ def test_outlier_does_not_flatten_ranking_among_good_models():
     series = pd.Series(np.random.RandomState(0).randn(600) + 100,
                         index=pd.date_range("2023-01-01", periods=600))
 
-    results, _ = run_all_models(series, forecast_horizon=10, models=registry)
+    results, _ = run_all_models(series, forecast_horizon=10, models=registry, backtest=False)
     ranked_names = [r["model_name"] for r in results]
 
     # The catastrophic outliers must sink to the bottom, not distort the

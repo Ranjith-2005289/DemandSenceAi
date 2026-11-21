@@ -10,13 +10,17 @@ straight from the user's data, not retrieval — mixing the two increases
 hallucination risk instead of reducing it. This module only grounds
 qualitative/advice-style questions in domain knowledge.
 """
+import hashlib
 import os
 from pathlib import Path
 
 import chromadb
+from dotenv import load_dotenv
 from google import genai
 
 from services.llm_retry import call_with_retry
+
+load_dotenv()
 
 KNOWLEDGE_BASE_DIR = Path(__file__).parent.parent / "knowledge_base"
 CHROMA_DIR = Path(__file__).parent.parent / ".chroma"
@@ -50,28 +54,43 @@ def _embed(text: str, task_type: str) -> list[float]:
 
 
 def _get_collection():
-    """Get (or lazily build) the knowledge-base collection. Idempotent — skips
-    re-embedding if the collection is already populated from a prior run."""
+    """Get (or lazily build) the knowledge-base collection.
+
+    Only documents that are new or whose content changed (by SHA-256) are
+    re-embedded, so edits to knowledge_base/*.md take effect on the next
+    start without paying to re-embed everything. (Previously this skipped
+    whenever the document COUNT matched, so an edited file was never
+    re-indexed.) Removed documents are deleted from the collection.
+    """
     global _chroma_client, _collection
     if _collection is not None:
         return _collection
 
     _chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-    _collection = _chroma_client.get_or_create_collection(COLLECTION_NAME)
+    collection = _chroma_client.get_or_create_collection(COLLECTION_NAME)
 
     doc_paths = sorted(KNOWLEDGE_BASE_DIR.glob("*.md"))
-    if _collection.count() >= len(doc_paths):
-        return _collection
+    existing = collection.get(include=["metadatas"])
+    stored = {i: (m or {}).get("sha256") for i, m in zip(existing["ids"], existing["metadatas"])}
 
     ids, embeddings, documents, metadatas = [], [], [], []
     for path in doc_paths:
         text = path.read_text()
+        sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        if stored.get(path.stem) == sha:
+            continue
         ids.append(path.stem)
         embeddings.append(_embed(text, "RETRIEVAL_DOCUMENT"))
         documents.append(text)
-        metadatas.append({"source": path.name})
+        metadatas.append({"source": path.name, "sha256": sha})
 
-    _collection.upsert(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
+    if ids:
+        collection.upsert(ids=ids, embeddings=embeddings, documents=documents, metadatas=metadatas)
+    stale = [i for i in stored if i not in {p.stem for p in doc_paths}]
+    if stale:
+        collection.delete(ids=stale)
+
+    _collection = collection
     return _collection
 
 

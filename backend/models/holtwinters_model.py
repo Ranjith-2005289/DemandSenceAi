@@ -17,18 +17,15 @@ warnings.filterwarnings("ignore")
 
 
 def _infer_period(series: pd.Series) -> int:
-    if not isinstance(series.index, pd.DatetimeIndex):
-        return 7
-    try:
-        freq = (pd.infer_freq(series.index) or "D").upper()
-        if "D" in freq: return 7
-        if "W" in freq: return 52
-        if "M" in freq: return 12
-        if "Q" in freq: return 4
-        if "H" in freq: return 24
-    except Exception:
-        pass
-    return 7
+    """Seasonal period from the index frequency.
+
+    Delegates to sarima_model's prefix-matching version. The previous
+    substring check (`"D" in freq` first) misread anchored aliases such as
+    "W-WED" or "QS-DEC" as daily, giving weekly/quarterly data a period of 7.
+    """
+    from models.sarima_model import _infer_seasonal_period
+    m = _infer_seasonal_period(series)
+    return m if m > 1 else 7
 
 
 # ── Holt-Winters ──────────────────────────────────────────────────────────────
@@ -55,7 +52,9 @@ def train_and_forecast(series: pd.Series, forecast_horizon: int) -> dict:
     best_rmse   = np.inf
     best_params = {}
     
-    trend_opts  = ["add", "mul"] if series.min() > 0 else ["add"]
+    # None lets level-only series (no real trend) avoid a spurious damped
+    # trend, which measurably hurt on flat retail series.
+    trend_opts  = [None, "add", "mul"] if series.min() > 0 else [None, "add"]
     season_opts = ["add", "mul"] if (use_seasonal and series.min() > 0) else (["add"] if use_seasonal else [None])
 
     for trend in trend_opts:
@@ -69,7 +68,7 @@ def train_and_forecast(series: pd.Series, forecast_horizon: int) -> dict:
                         trend=trend,
                         seasonal=seasonal,
                         seasonal_periods=m if seasonal else None,
-                        damped_trend=True,
+                        damped_trend=bool(trend),
                         initialization_method="estimated",
                     ).fit(optimized=True, remove_bias=True)
 
@@ -98,7 +97,7 @@ def train_and_forecast(series: pd.Series, forecast_horizon: int) -> dict:
                 trend=best_params["trend"],
                 seasonal=best_params["seasonal"],
                 seasonal_periods=m if best_params["seasonal"] else None,
-                damped_trend=True,
+                damped_trend=bool(best_params["trend"]),
                 initialization_method="estimated",
             ).fit(optimized=True, remove_bias=True)
             train_times.append(time.perf_counter() - t0)
@@ -134,7 +133,7 @@ def train_and_forecast(series: pd.Series, forecast_horizon: int) -> dict:
         trend=best_params["trend"],
         seasonal=best_params["seasonal"],
         seasonal_periods=m if best_params["seasonal"] else None,
-        damped_trend=True,
+        damped_trend=bool(best_params["trend"]),
         initialization_method="estimated",
     ).fit(optimized=True, remove_bias=True)
 
@@ -149,7 +148,7 @@ def train_and_forecast(series: pd.Series, forecast_horizon: int) -> dict:
         "train_time_sec": round(avg_train_time, 4),
         "pred_time_sec": round(avg_pred_time, 4),
         "forecast":        [round(float(v), 4) for v in fc],
-        "trend_mode":      best_params["trend"],
+        "trend_mode":      str(best_params["trend"]),
         "seasonal_mode":   str(best_params["seasonal"]),
         "seasonal_period": m,
     }

@@ -34,16 +34,30 @@ def test_full_pipeline_small_dataset_no_dl():
 
 
 @pytest.mark.slow
-def test_dl_gate_with_real_models_below_threshold():
-    """Confirms the real (non-fake) registry actually excludes DL models
-    below the row threshold, not just the fake-registry unit tests."""
+def test_real_registry_ranks_on_common_backtest_and_builds_ensemble():
+    """Every successful model must be scored on the same holdout windows
+    (comparable MASE), the removed models must stay removed, and the top-k
+    ensemble must be built from backtested members."""
     rng = np.random.RandomState(0)
-    n = 200  # below the 500-row daily DL threshold
+    n = 200
     series = pd.Series(
         100 + np.cumsum(rng.randn(n) * 0.3) + 10 * np.sin(2 * np.pi * np.arange(n) / 7),
         index=pd.date_range("2023-01-01", periods=n, freq="D"),
     )
-    results, run_info = run_all_models(series, forecast_horizon=7, include_dl=True)
-    assert run_info["dl_skipped"] is True
-    dl_names = {"RNN", "LSTM", "GRU", "BiLSTM", "CNN1D", "TCN", "Transformer"}
-    assert not (dl_names & {r["model_name"] for r in results})
+    results, run_info = run_all_models(series, forecast_horizon=7)
+    names = {r["model_name"] for r in results}
+
+    removed = {"RNN", "LSTM", "GRU", "BiLSTM", "CNN1D", "TCN", "Transformer", "KNN"}
+    assert not (removed & names)
+    assert {"Theta", "AutoETS", "MSTL", "SeasonalNaive"} <= names
+
+    assert run_info["evaluation"] == "holdout_backtest"
+    ok = [r for r in results if r["status"] == "success"]
+    assert all(r["evaluation"] == "holdout_backtest" for r in ok[:5])
+    scores = [r["adjusted_score"] for r in ok if np.isfinite(r["adjusted_score"])]
+    assert scores == sorted(scores)
+
+    ens = next((r for r in results if r["model_name"] == "Ensemble"), None)
+    assert ens is not None and len(ens["ensemble_members"]) >= 2
+    assert ens["interval_method"] == "backtest_calibrated"
+    assert len(ens["forecast_lower"]) == 7

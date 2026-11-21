@@ -4,8 +4,22 @@
 
 :root {
   color-scheme: light;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
+html { scroll-behavior: smooth; }
+
 body {
-  @apply bg-slate-50 text-slate-900 antialiased;
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  @apply bg-slate-50 font-sans text-slate-900;
 }
+
+#root { min-height: 100vh; }
+
+/* Recharts: no focus outline box around clicked charts */
+.recharts-wrapper *:focus { outline: none; }

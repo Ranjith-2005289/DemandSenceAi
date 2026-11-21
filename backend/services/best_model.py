@@ -1,6 +1,6 @@
 """
 best_model.py — Best model selector
-Picks the model with the lowest RMSE from run_all_models() results,
+Picks the top-ranked model (lowest common-backtest MASE) from run_all_models() results,
 with fallback logic if the winner's forecast is unusable.
 """
 
@@ -93,6 +93,10 @@ def select_best(
             "rmse":        r.get("rmse", float("inf")),
             "mae":         r.get("mae", float("inf")),
             "r2":          r.get("r2", -99.0),
+            "mape":        r.get("mape", float("inf")),
+            "mase":        r.get("mase"),
+            "evaluation":  r.get("evaluation"),
+            "ensemble_members": r.get("ensemble_members"),
             "status":      r.get("status", "unknown"),
             "elapsed_sec": r.get("elapsed_sec", 0),
             "error":       r.get("error"),
@@ -178,6 +182,10 @@ def select_best(
         "mae":             round(float(winner.get("mae", 0)), 4),
         "mape":            round(float(winner.get("mape", 0)), 4),
         "r2":              round(float(winner.get("r2", 0)), 4),
+        "mase":            (round(float(winner["mase"]), 4)
+                            if winner.get("mase") is not None else None),
+        "evaluation":      winner.get("evaluation"),
+        "ensemble_members": winner.get("ensemble_members"),
         "forecast":        winner["forecast"],
         "forecast_lower":  winner.get("forecast_lower"),
         "forecast_upper":  winner.get("forecast_upper"),

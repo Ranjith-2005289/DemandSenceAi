@@ -34,7 +34,8 @@ if not API_KEY:
     )
 _client = genai.Client(api_key=API_KEY)
 
-CHAT_MODEL = "gemini-flash-latest"
+CHAT_MODEL = "gemini-3.5-flash"
+MODEL_CHAIN = [CHAT_MODEL, "gemini-3.6-flash", "gemini-3.5-flash-lite"]
 
 
 def _accuracy_percent(mape: float | None) -> float:
@@ -53,32 +54,39 @@ def format_forecast_context(forecast_result: Dict[str, Any]) -> str:
     def _score(m):
         return _accuracy_percent(m.get("mape"))
 
-    sorted_models = sorted(
-        [m for m in all_models if m.get("status") == "success"],
-        key=_score, reverse=True,
-    )
+    # Keep the system's own ranking order (all_models arrives sorted by the
+    # selection score) and mark the winner by NAME. Re-sorting by MAPE here
+    # used to star whichever model had the best MAPE as "selected", which
+    # could contradict the model the system actually chose.
+    best_name = best_model.get("best_model_name")
+    sorted_models = [m for m in all_models if m.get("status") == "success"]
 
     lines = []
-    if run_info.get("dl_skipped"):
+    if run_info.get("evaluation") == "holdout_backtest":
         lines.append(
-            f"NOTE: Deep learning models (RNN, LSTM, GRU, BiLSTM, CNN1D, TCN, Transformer) "
-            f"were automatically skipped for this run — this dataset has only "
-            f"{run_info.get('row_count')} rows, below the {run_info.get('min_rows_for_dl')}-row "
-            f"minimum used for reliable deep learning forecasts. This was a deliberate system "
-            f"decision, not an error — state it as a fact if relevant, don't re-derive it."
+            f"EVALUATION METHOD: every model was refit from {run_info.get('backtest_origins')} "
+            f"earlier forecast origin(s) and forecast the next {run_info.get('backtest_horizon')} "
+            f"periods multi-step; RMSE/MAE/MAPE/MASE below are measured on those held-out windows, "
+            f"identically for every model. Ranking is by MASE (mean absolute scaled error): "
+            f"MASE < 1 means the model beat a seasonal-naive forecast, lower is better."
         )
         lines.append("")
 
-    lines.append("MODEL PERFORMANCE COMPARISON:")
+    lines.append("MODEL PERFORMANCE COMPARISON (system ranking, best first):")
     lines.append("=" * 80)
     for i, model in enumerate(sorted_models, 1):
         acc = _score(model)
         lines.append(f"{i}. {model.get('model_name', 'Unknown')}:")
-        lines.append(f"   - Accuracy: {acc:.2f}%")
+        mase = model.get("mase")
+        if mase is not None:
+            lines.append(f"   - MASE: {float(mase):.3f}")
+        lines.append(f"   - Accuracy (100 - MAPE): {acc:.2f}%")
         lines.append(f"   - RMSE: {float(model.get('rmse', 0) or 0):.4f}")
         lines.append(f"   - MAE: {float(model.get('mae', 0) or 0):.4f}")
         lines.append(f"   - R² Score: {float(model.get('r2', 0) or 0):.4f}")
-        if i == 1:
+        if model.get("ensemble_members"):
+            lines.append(f"   - Equal-weight average of: {', '.join(model['ensemble_members'])}")
+        if model.get("model_name") == best_name:
             lines.append("   ⭐ BEST MODEL (Selected)")
         lines.append("")
 
@@ -191,8 +199,12 @@ class ExplainerChat:
         self.product_context = format_product_context(product_summary)
         self.system_prompt = create_system_prompt(self.context, self.product_context)
         self.chat_history: List[Dict[str, str]] = list(history) if history else []
-        self._chat = _client.chats.create(
-            model=CHAT_MODEL,
+        self._model = CHAT_MODEL
+        self._chat = self._create_chat(self._model)
+
+    def _create_chat(self, model: str):
+        return _client.chats.create(
+            model=model,
             config=types.GenerateContentConfig(system_instruction=self.system_prompt),
             history=_history_to_gemini_content(self.chat_history) if self.chat_history else None,
         )
@@ -230,13 +242,26 @@ class ExplainerChat:
             else:
                 augmented_message = user_question
 
-            response = call_with_retry(self._chat.send_message, augmented_message)
-            response_text = response.text
+            last_error = None
+            for model in MODEL_CHAIN:
+                try:
+                    if model != self._model:
+                        self._model = model
+                        self._chat = self._create_chat(model)
+                    response = call_with_retry(self._chat.send_message, augmented_message)
+                    response_text = response.text
 
-            self.chat_history.append({"role": "user", "content": user_question})
-            self.chat_history.append({"role": "assistant", "content": response_text})
-            self._persist()
-            return response_text
+                    self.chat_history.append({"role": "user", "content": user_question})
+                    self.chat_history.append({"role": "assistant", "content": response_text})
+                    self._persist()
+                    return response_text
+                except Exception as e:
+                    last_error = e
+                    continue
+
+            error_msg = f"Error generating response: {last_error}"
+            print(f"❌ Gemini API Error: {error_msg}")
+            return error_msg
         except Exception as e:
             error_msg = f"Error generating response: {str(e)}"
             print(f"❌ Gemini API Error: {error_msg}")
@@ -247,10 +272,8 @@ class ExplainerChat:
 
     def clear_history(self):
         self.chat_history = []
-        self._chat = _client.chats.create(
-            model=CHAT_MODEL,
-            config=types.GenerateContentConfig(system_instruction=self.system_prompt),
-        )
+        self._model = CHAT_MODEL
+        self._chat = self._create_chat(self._model)
         self._persist()
 
 

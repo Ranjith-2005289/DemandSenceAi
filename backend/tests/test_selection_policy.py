@@ -71,7 +71,7 @@ def test_default_ranks_by_cross_validated_rmse(series, registry):
     """The regression this whole change exists to prevent: the most accurate
     model must win, even when it is by far the slowest to train."""
     model_runner.SELECTION_TIME_BUDGET_SEC = None
-    results, _ = run_all_models(series, forecast_horizon=10, models=registry)
+    results, _ = run_all_models(series, forecast_horizon=10, models=registry, backtest=False)
 
     assert [r["model_name"] for r in results] == [
         "SARIMA", "SARIMAX", "XGBoost", "MovingAverage", "KNN",
@@ -84,7 +84,7 @@ def test_slow_accurate_model_is_not_penalised_for_being_slow(series, registry):
     """SARIMA trains ~1.2 million times slower than MovingAverage. Under the old
     score that alone demoted it; it must not now."""
     model_runner.SELECTION_TIME_BUDGET_SEC = None
-    results, _ = run_all_models(series, forecast_horizon=10, models=registry)
+    results, _ = run_all_models(series, forecast_horizon=10, models=registry, backtest=False)
     by_name = {r["model_name"]: r for r in results}
 
     assert by_name["SARIMA"]["train_time_sec"] > by_name["MovingAverage"]["train_time_sec"] * 1e6
@@ -101,7 +101,7 @@ def test_default_budget_is_none(series, registry):
 
 def test_budget_excludes_models_that_exceed_it(series, registry):
     model_runner.SELECTION_TIME_BUDGET_SEC = 1.5
-    results, _ = run_all_models(series, forecast_horizon=10, models=registry)
+    results, _ = run_all_models(series, forecast_horizon=10, models=registry, backtest=False)
     by_name = {r["model_name"]: r for r in results}
 
     assert by_name["SARIMA"]["within_time_budget"] is False
@@ -114,7 +114,7 @@ def test_budget_excludes_models_that_exceed_it(series, registry):
 
 def test_over_budget_models_rank_below_every_affordable_one(series, registry):
     model_runner.SELECTION_TIME_BUDGET_SEC = 1.5
-    results, _ = run_all_models(series, forecast_horizon=10, models=registry)
+    results, _ = run_all_models(series, forecast_horizon=10, models=registry, backtest=False)
 
     affordable = [r["adjusted_score"] for r in results if r["within_time_budget"]]
     excluded = [r["adjusted_score"] for r in results if not r["within_time_budget"]]
@@ -133,7 +133,7 @@ def test_over_budget_offset_survives_a_catastrophic_outlier(series):
         "SlowGood":     (_model("SlowGood", 1000.0, train_time=90.0), 200, "statistical"),
         "FastOkay":     (_model("FastOkay", 1200.0, train_time=0.02), 200, "ml"),
     }
-    results, _ = run_all_models(series, forecast_horizon=10, models=registry)
+    results, _ = run_all_models(series, forecast_horizon=10, models=registry, backtest=False)
 
     affordable = [r["adjusted_score"] for r in results if r["within_time_budget"]]
     excluded = [r["adjusted_score"] for r in results if not r["within_time_budget"]]
@@ -145,10 +145,10 @@ def test_over_budget_offset_survives_a_catastrophic_outlier(series):
 
 def test_budget_that_admits_everything_matches_no_budget(series, registry):
     model_runner.SELECTION_TIME_BUDGET_SEC = None
-    unconstrained, _ = run_all_models(series, forecast_horizon=10, models=registry)
+    unconstrained, _ = run_all_models(series, forecast_horizon=10, models=registry, backtest=False)
 
     model_runner.SELECTION_TIME_BUDGET_SEC = 1000.0
-    generous, _ = run_all_models(series, forecast_horizon=10, models=registry)
+    generous, _ = run_all_models(series, forecast_horizon=10, models=registry, backtest=False)
 
     assert ([r["model_name"] for r in unconstrained]
             == [r["model_name"] for r in generous])
@@ -160,7 +160,7 @@ def test_impossible_budget_falls_back_to_the_cheapest_model(series, registry):
     honouring of it is the cheapest model — matching the benchmarked policy
     exactly rather than silently ignoring the budget."""
     model_runner.SELECTION_TIME_BUDGET_SEC = 1e-9
-    results, _ = run_all_models(series, forecast_horizon=10, models=registry)
+    results, _ = run_all_models(series, forecast_horizon=10, models=registry, backtest=False)
 
     assert results[0]["model_name"] == "MovingAverage"   # cheapest at 5e-05s
     assert sum(r["within_time_budget"] for r in results) == 1
@@ -173,7 +173,7 @@ def test_stability_is_still_reported_but_no_longer_scored(series, registry):
     its discontinuity term penalises models for not anchoring to the last
     observation, which rewards persistence over genuine forecasting."""
     model_runner.SELECTION_TIME_BUDGET_SEC = None
-    results, _ = run_all_models(series, forecast_horizon=10, models=registry)
+    results, _ = run_all_models(series, forecast_horizon=10, models=registry, backtest=False)
 
     assert all("stability_penalty" in r for r in results)
     # Ranking is pure RMSE order, so it cannot have been perturbed by stability.
@@ -189,7 +189,7 @@ def test_failed_models_still_sink_to_the_bottom(series):
         "Good":   (_model("Good", 100.0), 200, "ml"),
         "Broken": (_broken, 200, "ml"),
     }
-    results, _ = run_all_models(series, forecast_horizon=10, models=registry)
+    results, _ = run_all_models(series, forecast_horizon=10, models=registry, backtest=False)
 
     assert results[0]["model_name"] == "Good"
     assert results[-1]["model_name"] == "Broken"
@@ -203,7 +203,7 @@ def test_select_best_still_consumes_adjusted_score(series, registry):
     from services.best_model import select_best
 
     model_runner.SELECTION_TIME_BUDGET_SEC = None
-    results, _ = run_all_models(series, forecast_horizon=10, models=registry)
+    results, _ = run_all_models(series, forecast_horizon=10, models=registry, backtest=False)
     best = select_best(results, series=series)
 
     assert best["best_model_name"] == "SARIMA"

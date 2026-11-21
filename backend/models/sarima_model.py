@@ -29,7 +29,7 @@ MAX_EVAL_ROWS = 2000
 # grid-searching 35 of them is the dominant cost blowup for genuinely
 # high-frequency data (hourly-within-something, minutely...) — well beyond
 # the realistic range for retail seasonality (7/12/4/52).
-MAX_GRID_SEARCH_SEASONAL_PERIOD = 24
+MAX_GRID_SEARCH_SEASONAL_PERIOD = 12
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -173,6 +173,15 @@ def train_and_forecast(series: pd.Series, forecast_horizon: int) -> dict:
         split_idx = max(int(len(eval_series) * 0.8), 15)
         order, seasonal_order, _ = _best_sarima_order(eval_series.iloc[:split_idx], d, m)
 
+    # NOTE (v0.2): every fold is now scored with ONE multi-step forecast over
+    # its test window. The per-step .append() loop below is kept only as the
+    # fallback path and no longer runs for successfully fitted models. Why:
+    # (1) model_runner ranks on a common multi-step holdout backtest, so a
+    # one-step-ahead internal metric was both inconsistent with that and
+    # unused for ranking; (2) at m=24 (hourly data) the loop over hundreds of
+    # test points, on top of a 36-fit order grid search, made SARIMA/SARIMAX
+    # exceed the 6-minute timeout on a 2,000-row series.
+    #
     # Walk-forward validation: fit once per fold, then cheaply extend the
     # fitted state with each new true observation via .append(refit=False)
     # instead of re-estimating the model from scratch at every test point.
@@ -197,7 +206,7 @@ def train_and_forecast(series: pd.Series, forecast_horizon: int) -> dict:
         train_times.append(time.perf_counter() - t0)
 
         t1 = time.perf_counter()
-        if fit_model is not None and large_seasonal_period:
+        if fit_model is not None:  # multi-step per fold (see note above)
             try:
                 preds = [float(v) for v in np.asarray(fit_model.forecast(len(test)))]
             except Exception:
@@ -327,7 +336,7 @@ def train_and_forecast_sarimax(
         train_times.append(time.perf_counter() - t0)
 
         t1 = time.perf_counter()
-        if fit_model is not None and large_seasonal_period:
+        if fit_model is not None:  # multi-step per fold (see note above)
             try:
                 preds = [float(v) for v in np.asarray(fit_model.forecast(len(test_y), exog=test_x))]
             except Exception:

@@ -257,7 +257,7 @@ def train_and_forecast(
             max_features      = "sqrt",
             bootstrap         = True,
             oob_score         = True,
-            n_jobs            = -1,
+            n_jobs            = 1,  # parallelism comes from the model process pool
             random_state      = 42,
         )
 
@@ -303,7 +303,7 @@ def train_and_forecast(
         max_features      = "sqrt",
         bootstrap         = True,
         oob_score         = True,
-        n_jobs            = -1,
+        n_jobs            = 1,  # parallelism comes from the model process pool
         random_state      = 42,
     )
     final_model.fit(X_full_s, y_full)

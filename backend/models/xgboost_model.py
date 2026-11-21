@@ -259,7 +259,7 @@ def train_and_forecast(
             early_stopping_rounds = 30,
             eval_metric           = "rmse",
             random_state          = 42,
-            n_jobs                = -1,
+            n_jobs                = 1,  # parallelism comes from the model process pool
             verbosity             = 0,
         )
 
@@ -312,7 +312,7 @@ def train_and_forecast(
         reg_lambda       = 1.0,
         gamma            = 0.05,
         random_state     = 42,
-        n_jobs           = -1,
+        n_jobs           = 1,  # parallelism comes from the model process pool
         verbosity        = 0,
     )
     final_model.fit(X_full_s, y_full, verbose=False)

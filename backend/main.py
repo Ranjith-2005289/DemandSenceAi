@@ -1,11 +1,30 @@
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+import threading
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from routers import forecast, upload, chat, insights
 
-app = FastAPI(title="Retail Forecasting Backend", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Start the model worker processes in the background so the first
+    # forecast doesn't pay their spawn + import cost; never block startup.
+    from services.model_runner import warm_up, _discard_process_pool
+    threading.Thread(target=warm_up, daemon=True).start()
+    yield
+    _discard_process_pool()
+
+
+app = FastAPI(title="Retail Forecasting Backend", version="0.2.0", lifespan=lifespan)
 
 # Local dev origins always allowed; production frontend origin(s) come from
 # the ALLOWED_ORIGINS env var (comma-separated) so this doesn't need a code
@@ -28,6 +47,11 @@ app.include_router(upload.router)
 app.include_router(forecast.router)
 app.include_router(chat.router)
 app.include_router(insights.router)
+
+# Serve uploaded files and generated reports as static content (read-only).
+uploads_dir = Path("uploads")
+if uploads_dir.exists():
+    app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
 
 
 @app.get("/health")

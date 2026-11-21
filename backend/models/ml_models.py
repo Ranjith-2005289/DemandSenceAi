@@ -1,4 +1,5 @@
-"""ml_models.py — Moving Average, KNN, SVM forecasting models
+"""ml_models.py — Moving Average and SVM forecasting models
+(KNN was removed: worst ML model on the held-out benchmark, no better than seasonal naive.)
 All use the same lag/rolling feature engineering for fair comparison.
 """
 
@@ -7,7 +8,6 @@ import numpy as np
 import pandas as pd
 from math import sqrt
 from sklearn.metrics import mean_squared_error
-from sklearn.neighbors import KNeighborsRegressor
 from sklearn.svm import SVR
 from sklearn.preprocessing import RobustScaler
 from sklearn.model_selection import TimeSeriesSplit
@@ -181,108 +181,6 @@ def train_and_forecast_ma(series: pd.Series, forecast_horizon: int) -> dict:
         "pred_time_sec": round(avg_pred_time, 4),
         "forecast":    [round(float(v), 4) for v in fc],
         "best_window": best_window,
-    }
-
-
-# ── KNN ───────────────────────────────────────────────────────────────────────
-
-def train_and_forecast_knn(series: pd.Series, forecast_horizon: int) -> dict:
-    """KNN Regressor with lag features. Auto-tunes k via cross-val on test."""
-    series = series.dropna().astype(float)
-    min_req = max(LAG_DAYS) + 5
-    if len(series) < min_req:
-        raise ValueError(f"KNN needs ≥ {min_req} observations, got {len(series)}.")
-
-    trend_model = _fit_trend(series)
-    residual = _detrend(series, trend_model)
-
-    feat_df = _create_features(residual)
-    X, y, t_idx, cols = _build_xy(feat_df)
-
-    tscv = TimeSeriesSplit(n_splits=get_cv_splits(len(X)))
-
-    cv_metrics = []
-    train_times = []
-    pred_times = []
-
-    # Tune k (scored on the reconstructed level, not the raw residual)
-    best_rmse, best_k = np.inf, 5
-    for k in [3, 5, 7, 10, 15]:
-        if k >= len(X) * 0.5:
-            continue
-        fold_rmses = []
-        for train_idx, test_idx in tscv.split(X):
-            X_tr, X_te = X[train_idx], X[test_idx]
-            y_tr = y[train_idx]
-            t_te = t_idx[test_idx]
-            scaler = RobustScaler()
-            X_tr_s = scaler.fit_transform(X_tr)
-            X_te_s = scaler.transform(X_te)
-            try:
-                m = KNeighborsRegressor(n_neighbors=k, weights="distance", metric="euclidean")
-                m.fit(X_tr_s, y_tr)
-                pred = m.predict(X_te_s) + trend_model.predict(t_te.reshape(-1, 1))
-                level_te = series.values[t_te]
-                if series.min() >= 0:
-                    pred = np.clip(pred, 0, None)
-                fold_rmses.append(sqrt(mean_squared_error(level_te, pred)))
-            except Exception:
-                continue
-        if fold_rmses:
-            avg_rmse = np.mean(fold_rmses)
-            if avg_rmse < best_rmse:
-                best_rmse, best_k = avg_rmse, k
-
-    # Get metrics on best k
-    for train_idx, test_idx in tscv.split(X):
-        X_tr, X_te = X[train_idx], X[test_idx]
-        y_tr = y[train_idx]
-        t_te = t_idx[test_idx]
-        scaler = RobustScaler()
-        X_tr_s = scaler.fit_transform(X_tr)
-        X_te_s = scaler.transform(X_te)
-
-        m = KNeighborsRegressor(n_neighbors=best_k, weights="distance", metric="euclidean")
-        t0 = time.perf_counter()
-        m.fit(X_tr_s, y_tr)
-        train_times.append(time.perf_counter() - t0)
-
-        t1 = time.perf_counter()
-        pred = m.predict(X_te_s) + trend_model.predict(t_te.reshape(-1, 1))
-        pred_times.append(time.perf_counter() - t1)
-
-        level_te = series.values[t_te]
-        if series.min() >= 0:
-            pred = np.clip(pred, 0, None)
-
-        metrics = calculate_metrics(level_te, pred)
-        cv_metrics.append(metrics)
-
-    avg_metrics = {k: sum(m[k] for m in cv_metrics)/len(cv_metrics) for k in cv_metrics[0].keys()}
-    avg_train_time = sum(train_times)/len(train_times)
-    avg_pred_time = sum(pred_times)/len(pred_times)
-
-    # Refit on full data
-    feat_full = _create_features(residual)
-    X_f, y_f, t_idx_f, cols_f = _build_xy(feat_full)
-    sc_f = RobustScaler()
-    X_fs = sc_f.fit_transform(X_f)
-    final = KNeighborsRegressor(n_neighbors=best_k, weights="distance", metric="euclidean")
-    final.fit(X_fs, y_f)
-
-    fc_resid = _recursive_forecast(final, sc_f, residual, forecast_horizon, cols_f)
-    future_t = np.arange(len(series), len(series) + forecast_horizon).reshape(-1, 1)
-    fc = np.array(fc_resid) + trend_model.predict(future_t)
-    if series.min() >= 0:
-        fc = np.clip(fc, 0, None)
-
-    return {
-        "model_name": "KNN",
-        **avg_metrics,
-        "train_time_sec": round(avg_train_time, 4),
-        "pred_time_sec": round(avg_pred_time, 4),
-        "forecast":   [round(float(v), 4) for v in fc],
-        "best_k":     best_k,
     }
 
 
