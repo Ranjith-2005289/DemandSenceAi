@@ -131,13 +131,31 @@ function MapStep() {
   const d = upload.detected || {};
   const set = (k) => (v) => setConfig((c) => ({ ...c, [k]: v }));
   const horizonOk = isNum(Number(config.horizon)) && Number(config.horizon) >= 1 && Number(config.horizon) <= 365;
-  const ready = config.dateCol && config.targetCol && horizonOk;
+  const blockingErrors = upload.validation?.errors || [];
+  const ready = config.dateCol && config.targetCol && horizonOk && blockingErrors.length === 0;
   const columns = upload.columns || [];
   const preview = upload.preview || [];
   const exog = [...(d.exog_columns?.price_cols || []), ...(d.exog_columns?.promo_cols || [])];
 
   return (
     <div className="space-y-4">
+      {blockingErrors.length > 0 && (
+        <Banner
+          tone="bad"
+          title="This file can't be forecast yet"
+          action={
+            <Button size="sm" onClick={clearDataset}>
+              Choose another file
+            </Button>
+          }
+        >
+          <ul className="list-disc space-y-0.5 pl-4">
+            {blockingErrors.map((e, i) => (
+              <li key={i}>{e}</li>
+            ))}
+          </ul>
+        </Banner>
+      )}
       {run.status === "failed" && (
         <Banner tone="bad" title="The forecast run failed">
           {run.error}
@@ -167,7 +185,13 @@ function MapStep() {
               label="Forecast horizon"
               required
               htmlFor="f-h"
-              hint={horizonOk ? `Periods ahead, at ${freqLabel(upload.suggestions?.frequency).toLowerCase()} frequency.` : "Enter 1–365."}
+              hint={
+                !horizonOk
+                  ? "Enter 1–365."
+                  : freqLabel(upload.suggestions?.frequency) === "—"
+                  ? "Periods ahead."
+                  : `Periods ahead, at ${freqLabel(upload.suggestions?.frequency).toLowerCase()} frequency.`
+              }
             >
               <TextInput
                 id="f-h"

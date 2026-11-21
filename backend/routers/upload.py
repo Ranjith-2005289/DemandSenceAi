@@ -12,7 +12,9 @@ from datetime import datetime
 from fastapi import APIRouter, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 
-from services.preprocessor import PRICE_KEYWORDS, PROMO_KEYWORDS
+import re
+
+from services.preprocessor import PRICE_KEYWORDS, PROMO_KEYWORDS, _parse_dates, name_tokens as _name_tokens
 
 router = APIRouter()
 
@@ -46,6 +48,27 @@ NON_TARGET_KEYWORDS = {
     "zip", "postal", "phone", "latitude", "longitude", "lat", "lon",
     "flag", "bool", "active", "enabled",
 }
+
+# "customerid", "storeid": an entity name glued to "id" with no separator.
+ID_SUFFIX_ENTITIES = {
+    "customer", "cust", "product", "prod", "store", "item", "order", "transaction",
+    "txn", "user", "client", "row", "record", "invoice", "sku", "dept", "department",
+    "location", "loc", "branch", "region", "category", "cat", "emp", "employee",
+    "account", "acct", "session", "member", "vendor", "supplier", "shop",
+}
+
+
+def _is_non_target_name(col: str) -> bool:
+    """
+    Whole-word match against NON_TARGET_KEYWORDS. Substring matching hid real
+    targets: 'Paid_Amount' and 'Holiday_Sales' contain "id", 'Turkey_Sales'
+    contains "key", 'Liquid_Litres' contains "id".
+    """
+    tokens = _name_tokens(col)
+    if any(t in NON_TARGET_KEYWORDS for t in tokens):
+        return True
+    return any(t.endswith("id") and t[:-2] in ID_SUFFIX_ENTITIES for t in tokens)
+
 
 # Columns likely to be grouping / categorical dimensions
 GROUPING_KEYWORDS = {
@@ -190,8 +213,8 @@ def _detect_numeric_columns(df: pd.DataFrame, date_cols: list[str]) -> dict[str,
 
         col_lower = col.lower().replace(" ", "_")
 
-        # Skip obvious non-targets
-        if any(kw in col_lower for kw in NON_TARGET_KEYWORDS):
+        # Skip obvious non-targets (IDs, codes, coordinates, flags)
+        if _is_non_target_name(col):
             continue
 
         series = df[col].dropna()
@@ -263,8 +286,10 @@ def _detect_exog_columns(df: pd.DataFrame, date_cols: list[str]) -> dict[str, li
 def _infer_frequency(df: pd.DataFrame, date_col: str) -> str:
     """Infer the time series frequency from the date column."""
     try:
-        parsed = pd.to_datetime(df[date_col], errors="coerce")
-        parsed = parsed.dropna().sort_values()
+        # Same parser the forecast uses (resolves day-first dates), on unique
+        # dates: transaction-level files repeat each date many times, which
+        # makes pandas' frequency inference give up.
+        parsed = pd.DatetimeIndex(pd.Series(_parse_dates(df[date_col]).dropna().unique()).sort_values())
         if len(parsed) < 3:
             return "unknown"
         freq = pd.infer_freq(parsed)
@@ -284,7 +309,13 @@ def _infer_frequency(df: pd.DataFrame, date_col: str) -> str:
                 return "annual (estimated)"
         # Strip trailing digits (e.g. "MS" → "M", "QS-JAN" → "Q")
         freq_base = freq.rstrip("0123456789").split("-")[0].upper()
-        return FREQ_MAP.get(freq_base, freq)
+        # "MS"/"ME" → monthly, "QS" → quarterly, "W" anchors stripped above.
+        # "MIN" (pandas 3 minutes) and "B" (business days) need their own keys.
+        if freq_base in ("MIN", "T"):
+            return FREQ_MAP["T"]
+        if freq_base == "B":
+            return "business-day"
+        return FREQ_MAP.get(freq_base) or FREQ_MAP.get(freq_base[:1], freq)
     except Exception:
         return "unknown"
 
