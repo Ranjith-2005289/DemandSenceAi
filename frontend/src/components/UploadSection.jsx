@@ -1,11 +1,15 @@
-import { useEffect, useRef, useState } from "react";
-import { uploadCsv, errorMessage } from "../api";
-import { Alert, Badge, Button, Card, CardHeader, Field, Icon, Spinner, inputClass } from "./ui";
-import { MODEL_COUNT, fmtNumber } from "../lib/format";
+import { useState } from "react";
+import { uploadCsv, runForecast } from "../api";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { UploadCloud, AlertCircle, Loader2 } from "lucide-react";
 
 const SUPPORTED_EXTENSIONS = [".csv", ".xlsx", ".xlsm", ".json"];
 
-// Countries supported by the `holidays` package that Prophet uses.
+// Curated list of common countries the `holidays` package supports
 const COUNTRY_OPTIONS = [
   { code: "US", label: "United States" },
   { code: "GB", label: "United Kingdom" },
@@ -24,309 +28,402 @@ const COUNTRY_OPTIONS = [
   { code: "NZ", label: "New Zealand" },
 ];
 
-// The backend reports frequency as a word ("daily", "weekly (estimated)",
-// "minute-level") or occasionally a raw pandas alias ("W-SUN") — normalise both.
-const FREQ_WORDS = [
-  ["minute", "Minutely", "minutes"], ["hour", "Hourly", "hours"], ["business", "Business days", "business days"],
-  ["daily", "Daily", "days"], ["week", "Weekly", "weeks"], ["month", "Monthly", "months"],
-  ["quarter", "Quarterly", "quarters"], ["annual", "Yearly", "years"], ["year", "Yearly", "years"],
-];
-const ALIAS = { D: "daily", B: "business", W: "week", M: "month", MS: "month", ME: "month",
-                Q: "quarter", QS: "quarter", H: "hour", T: "minute", MIN: "minute", A: "annual", Y: "year" };
-function freqInfo(f) {
-  if (!f || f === "unknown") return { label: "Irregular", unit: "periods", estimated: false };
-  const raw = String(f);
-  const word = ALIAS[raw.split("-")[0].toUpperCase()] || raw.toLowerCase();
-  const hit = FREQ_WORDS.find(([k]) => word.includes(k));
-  return {
-    label: hit ? hit[1] : raw,
-    unit: hit ? hit[2] : "periods",
-    estimated: raw.includes("estimated"),
-  };
-}
-
-export default function UploadSection({ uploadData, initialConfig, onUploaded, onRun, onReset, error: runError }) {
+export default function UploadSection({ onUploadStart, onForecastStart, onForecastComplete, onForecastError, onStatus, sessionId }) {
   const [file, setFile] = useState(null);
-  const [dragging, setDragging] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState(null);
-  const inputRef = useRef(null);
+  const [uploadData, setUploadData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [step, setStep] = useState("upload"); // "upload", "config", "running"
+  const [error, setError] = useState(null);
 
-  const [dateCol, setDateCol] = useState("");
-  const [targetCol, setTargetCol] = useState("");
-  const [groupCol, setGroupCol] = useState("");
-  const [country, setCountry] = useState("");
-  const [horizon, setHorizon] = useState(30);
+  // Column selection state
+  const [selectedDateCol, setSelectedDateCol] = useState("");
+  const [selectedTargetCol, setSelectedTargetCol] = useState("");
+  const [selectedGroupCol, setSelectedGroupCol] = useState("none");
+  const [selectedCountry, setSelectedCountry] = useState("none");
+  const [forecastHorizon, setForecastHorizon] = useState(30);
 
-  // Seed the form from the backend's suggestions whenever a new file lands.
-  // (or from the previous run's settings when returning to re-configure).
-  useEffect(() => {
-    if (!uploadData) return;
-    const c = initialConfig || {};
-    setDateCol(c.date_col || uploadData.suggestions?.date_col || "");
-    setTargetCol(c.target_col || uploadData.suggestions?.target_col || "");
-    setGroupCol(c.group_col || "");
-    setCountry(c.country || "");
-    if (c.forecast_horizon) setHorizon(c.forecast_horizon);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uploadData]);
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
 
-  const acceptFile = (f) => {
-    if (!f) return;
-    if (!SUPPORTED_EXTENSIONS.some((ext) => f.name.toLowerCase().endsWith(ext))) {
-      setUploadError(`Unsupported file type. Use ${SUPPORTED_EXTENSIONS.join(", ")}.`);
-      return;
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const droppedFiles = e.dataTransfer.files;
+    if (droppedFiles.length > 0) {
+      const f = droppedFiles[0];
+      if (SUPPORTED_EXTENSIONS.some((ext) => f.name.toLowerCase().endsWith(ext))) {
+        setFile(f);
+      } else {
+        onStatus?.(`Please drop a supported file (${SUPPORTED_EXTENSIONS.join(", ")}).`);
+      }
     }
-    setUploadError(null);
-    setFile(f);
+  };
+
+  const handleFileInput = (e) => {
+    const f = e.target.files?.[0] || null;
+    if (f) {
+      setFile(f);
+    }
   };
 
   const handleUpload = async () => {
-    if (!file) return;
-    setUploading(true);
-    setUploadError(null);
+    if (!file) {
+      setError("Select a CSV file first.");
+      onStatus?.("Select a CSV file first.");
+      return;
+    }
+
     try {
+      setLoading(true);
+      setError(null);
+      setSelectedDateCol("");
+      setSelectedTargetCol("");
+      setSelectedGroupCol("none");
+      setSelectedCountry("none");
+      onStatus?.("Uploading and analyzing...");
+
       const formData = new FormData();
       formData.append("file", file);
+
       const result = await uploadCsv(formData);
-      onUploaded(result, file.name);
-    } catch (err) {
-      setUploadError(errorMessage(err, "Upload failed."));
+      setUploadData(result);
+
+      if (result?.suggestions?.date_col) {
+        setSelectedDateCol(result.suggestions.date_col);
+      }
+      if (result?.suggestions?.target_col) {
+        setSelectedTargetCol(result.suggestions.target_col);
+      }
+
+      setStep("config");
+      onStatus?.("File uploaded. Please configure columns and forecast horizon.");
+    } catch (error) {
+      const errorMsg = error?.response?.data?.detail || error?.message || "Upload failed.";
+      setError(errorMsg);
+      onStatus?.(errorMsg);
+      setStep("upload");
     } finally {
-      setUploading(false);
+      setLoading(false);
     }
   };
 
-  // ── Step 1: file drop ────────────────────────────────────────────────────
-  if (!uploadData) {
-    return (
-      <div className="mx-auto max-w-3xl animate-fade-in">
-        <div className="mb-8 text-center">
-          <Badge tone="brand" className="mb-4">
-            {MODEL_COUNT} models + ensemble · backtested · explained
-          </Badge>
-          <h1 className="text-3xl font-semibold tracking-tight text-slate-900 sm:text-4xl">
-            Forecast demand from any sales history
-          </h1>
-          <p className="mx-auto mt-3 max-w-xl text-base text-slate-600">
-            Upload a time series. Every model is trained, tested on the same held-out windows,
-            and the most accurate one — or an ensemble of the best — produces your forecast.
-          </p>
-        </div>
+  const handleRunForecast = async () => {
+    if (!selectedDateCol || !selectedTargetCol) {
+      onStatus?.("Please select both date and target columns.");
+      return;
+    }
 
-        <Card className="p-6">
-          {uploadError && <div className="mb-4"><Alert title="Upload failed">{uploadError}</Alert></div>}
+    if (!uploadData?.file?.saved_as) {
+      onStatus?.("Upload data first.");
+      return;
+    }
 
-          <input
-            ref={inputRef}
-            type="file"
-            accept={SUPPORTED_EXTENSIONS.join(",")}
-            onChange={(e) => acceptFile(e.target.files?.[0])}
-            className="hidden"
-          />
-          <button
-            type="button"
-            onClick={() => inputRef.current?.click()}
-            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={(e) => { e.preventDefault(); setDragging(false); acceptFile(e.dataTransfer.files?.[0]); }}
-            className={`flex w-full flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-12 text-center transition ${
-              dragging ? "border-brand-400 bg-brand-50" : "border-slate-200 bg-slate-50/60 hover:border-brand-300 hover:bg-brand-50/40"
-            }`}
-          >
-            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-brand-600 shadow-card ring-1 ring-slate-200">
-              <Icon.Upload />
-            </span>
-            <span className="mt-4 text-sm font-semibold text-slate-900">
-              Drop your file here, or <span className="text-brand-600">browse</span>
-            </span>
-            <span className="mt-1 text-xs text-slate-500">CSV, Excel (.xlsx) or JSON · one row per date (or per transaction)</span>
-          </button>
+    try {
+      setLoading(true);
+      setError(null);
+      onForecastStart?.();
+      
+      const groupColActual = selectedGroupCol === "none" ? null : selectedGroupCol;
+      const countryActual = selectedCountry === "none" ? null : selectedCountry;
+      
+      const uploadMetadata = {
+        filename: file.name,
+        num_rows: uploadData.shape?.rows,
+        num_cols: uploadData.shape?.cols,
+        selected_date_col: selectedDateCol,
+        selected_target_col: selectedTargetCol,
+        forecast_horizon: forecastHorizon,
+        saved_as: uploadData.file.saved_as,
+        group_col: groupColActual,
+        country: countryActual,
+      };
+      
+      onUploadStart?.(uploadMetadata);
 
-          {file && (
-            <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-4 py-3">
-              <div className="flex min-w-0 items-center gap-3">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600"><Icon.File /></span>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-slate-900">{file.name}</p>
-                  <p className="text-xs text-slate-500">{(file.size / 1024).toFixed(1)} KB</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button variant="ghost" size="sm" onClick={() => setFile(null)} disabled={uploading}>Remove</Button>
-                <Button onClick={handleUpload} disabled={uploading}>
-                  {uploading ? <><Spinner /> Analyzing…</> : "Upload & analyze"}
-                </Button>
-              </div>
-            </div>
-          )}
-        </Card>
+      setStep("running");
+      onStatus?.("Training models and generating forecast...");
 
-        <div className="mt-6 grid gap-4 sm:grid-cols-3">
-          {[
-            ["Auto-detects columns", "Dates, numeric targets, product/store groupings and price/promo signals."],
-            ["Honest model selection", "Each model forecasts the same unseen windows; ranked by MASE vs. a naive baseline."],
-            ["AI explanations", "Ask why a model won or how to act on the forecast, grounded in your numbers."],
-          ].map(([t, d]) => (
-            <div key={t} className="rounded-xl border border-slate-200/80 bg-white/60 p-4">
-              <p className="text-sm font-semibold text-slate-900">{t}</p>
-              <p className="mt-1 text-xs leading-relaxed text-slate-600">{d}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
+      const result = await runForecast(
+        uploadData.file.saved_as,
+        selectedDateCol,
+        selectedTargetCol,
+        forecastHorizon,
+        null,
+        null,
+        countryActual,
+        sessionId || null
+      );
 
-  // ── Step 2: configure ────────────────────────────────────────────────────
-  const dateColumns = uploadData.detected?.date_columns || [];
-  const numericColumns = uploadData.detected?.numeric_columns || [];
-  const groupingColumns = uploadData.detected?.grouping_columns || [];
-  const preview = uploadData.preview || [];
-  const previewCols = preview.length ? Object.keys(preview[0]) : [];
-  const freq = uploadData.suggestions?.frequency;
-  const canRun = dateCol && targetCol && horizon >= 1 && horizon <= 365;
-
-  const submit = (e) => {
-    e.preventDefault();
-    if (!canRun) return;
-    onRun({
-      date_col: dateCol,
-      target_col: targetCol,
-      group_col: groupCol || null,
-      country: country || null,
-      forecast_horizon: horizon,
-    });
+      onForecastComplete?.(result);
+      onStatus?.("Forecast completed!");
+    } catch (error) {
+      const errorMsg = error?.response?.data?.detail || error?.message || "Forecast failed.";
+      onStatus?.(errorMsg);
+      setStep("config");
+      // App shows the error above the form; fall back to the inline alert.
+      if (onForecastError) onForecastError(String(errorMsg));
+      else setError(errorMsg);
+    } finally {
+      setLoading(false);
+    }
   };
 
+  const fileSize = file ? (file.size / 1024).toFixed(2) : 0;
+  const dateColumns = uploadData?.detected?.date_columns || [];
+  const numericColumns = uploadData?.detected?.numeric_columns || [];
+  const groupingColumns = uploadData?.detected?.grouping_columns || [];
+
   return (
-    <div className="grid gap-6 animate-fade-in lg:grid-cols-5">
-      <Card className="lg:col-span-2">
-        <CardHeader title="Configure forecast" subtitle="We pre-filled the columns we detected." />
-        <form onSubmit={submit} className="space-y-5 p-6">
-          {runError && <Alert title="Forecast failed">{runError}</Alert>}
-          {(uploadData.validation?.errors || []).map((e, i) => (
-            <Alert key={`e${i}`} title="Data problem">{e}</Alert>
-          ))}
-          {(uploadData.validation?.warnings || []).length > 0 && (
-            <Alert tone="warning" title="Heads up">
-              <ul className="list-disc space-y-0.5 pl-4">
-                {uploadData.validation.warnings.map((w, i) => <li key={i}>{w}</li>)}
-              </ul>
-            </Alert>
-          )}
-
-          <Field label="Date column">
-            <select value={dateCol} onChange={(e) => setDateCol(e.target.value)} className={inputClass}>
-              <option value="">Select…</option>
-              {dateColumns.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </Field>
-
-          <Field label="What to forecast" hint="The numeric column to predict (sales, units, revenue…).">
-            <select value={targetCol} onChange={(e) => setTargetCol(e.target.value)} className={inputClass}>
-              <option value="">Select…</option>
-              {numericColumns.map((c) => (
-                <option key={c} value={c}>
-                  {c}{uploadData.detected?.numeric_meta?.[c]?.is_likely_target ? "  · suggested" : ""}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          <Field
-            label={`Forecast horizon (${freqInfo(freq).unit})`}
-            hint={`How far ahead to predict, 1–365 ${freqInfo(freq).unit}.`}
-          >
-            <input
-              type="number" min="1" max="365" value={horizon}
-              onChange={(e) => setHorizon(Math.min(365, Math.max(1, parseInt(e.target.value, 10) || 1)))}
-              className={inputClass}
-            />
-          </Field>
-
-          {groupingColumns.length > 0 && (
-            <Field label="Break down by (optional)" hint="Adds a ranked table per group, each forecastable on its own.">
-              <select value={groupCol} onChange={(e) => setGroupCol(e.target.value)} className={inputClass}>
-                <option value="">None — whole dataset</option>
-                {groupingColumns.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </Field>
-          )}
-
-          <Field label="Holiday calendar (optional)" hint="Lets Prophet account for that country's public holidays.">
-            <select value={country} onChange={(e) => setCountry(e.target.value)} className={inputClass}>
-              <option value="">None</option>
-              {COUNTRY_OPTIONS.map(({ code, label }) => <option key={code} value={code}>{label}</option>)}
-            </select>
-          </Field>
-
-          <div className="flex gap-3 pt-1">
-            <Button type="button" variant="secondary" onClick={onReset} className="flex-1">Change file</Button>
-            <Button type="submit" disabled={!canRun} className="flex-[2]">
-              <Icon.Sparkles width={16} height={16} /> Run forecast
-            </Button>
-          </div>
-        </form>
-      </Card>
-
-      <div className="space-y-6 lg:col-span-3">
-        <div className="grid grid-cols-3 gap-4">
-          {[
-            ["Rows", fmtNumber(uploadData.shape?.rows)],
-            ["Columns", fmtNumber(uploadData.shape?.cols)],
-            ["Frequency", freqInfo(freq).label + (freqInfo(freq).estimated ? " (est.)" : "")],
-          ].map(([l, v]) => (
-            <Card key={l} className="p-4">
-              <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{l}</p>
-              <p className="mt-1 text-xl font-semibold text-slate-900">{v}</p>
-            </Card>
-          ))}
+    <Card className="shadow-sm border border-slate-200">
+      <CardContent className="pt-0 px-0 pb-0">
+        {/* Header row */}
+        <div className="px-7 pt-6 pb-5 border-b border-slate-100">
+          <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Upload & Configure</p>
+          <p className="mt-1 text-sm text-slate-500">Select your file, map columns, and start the forecast.</p>
         </div>
 
-        <Card>
-          <CardHeader
-            title="Data preview"
-            subtitle={uploadData.file?.filename}
-            actions={<Badge>{previewCols.length} columns</Badge>}
-          />
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-100 bg-slate-50/70">
-                  {previewCols.map((c) => (
-                    <th key={c} className="whitespace-nowrap px-4 py-2.5 text-left text-xs font-semibold text-slate-600">
-                      <span className="inline-flex items-center gap-1.5">
-                        {c}
-                        {c === dateCol && <Badge tone="brand">date</Badge>}
-                        {c === targetCol && <Badge tone="success">target</Badge>}
-                        {c === groupCol && <Badge tone="warning">group</Badge>}
-                      </span>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {preview.map((row, i) => (
-                  <tr key={i}>
-                    {previewCols.map((c) => (
-                      <td key={c} className="whitespace-nowrap px-4 py-2 font-mono text-xs text-slate-700">
-                        {row[c] === null || row[c] === undefined ? <span className="text-slate-300">null</span> : String(row[c])}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <div className="px-7 py-6">
+        {error && (
+          <Alert variant="destructive" className="mb-5">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Error</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+
+        {step === "upload" && (
+          <div className="space-y-4">
+            <input
+              type="file"
+              accept={SUPPORTED_EXTENSIONS.join(",")}
+              onChange={handleFileInput}
+              className="hidden"
+              id="csv-input"
+            />
+            <label
+              htmlFor="csv-input"
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+              className="group relative rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 p-10 text-center transition-all hover:border-blue-400 hover:bg-blue-50 cursor-pointer block"
+            >
+              <div className="flex flex-col items-center gap-3">
+                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white shadow-sm border border-slate-200 group-hover:border-blue-200 transition-all">
+                  <UploadCloud className="h-7 w-7 text-slate-400 group-hover:text-blue-500 transition-colors" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">
+                    Drag & drop your file here
+                  </p>
+                  <p className="mt-0.5 text-xs text-slate-400">CSV, Excel (.xlsx, .xlsm), or JSON</p>
+                </div>
+              </div>
+              <div className="mt-5">
+                <span className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 shadow-sm group-hover:border-blue-200 group-hover:text-blue-700 transition-all">
+                  Browse files
+                </span>
+              </div>
+            </label>
+
+            {file && (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-slate-900">{file.name}</p>
+                  <p className="text-xs text-slate-600">{fileSize} KB</p>
+                </div>
+                <Button variant="ghost" size="sm" onClick={() => setFile(null)}>Change</Button>
+              </div>
+            )}
+
+            <Button
+              onClick={handleUpload}
+              disabled={!file || loading}
+              className="w-full h-11 font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Uploading & analysing...
+                </>
+              ) : (
+                "Analyse & Continue"
+              )}
+            </Button>
           </div>
-          {uploadData.data_quality?.total_nulls > 0 && (
-            <p className="border-t border-slate-100 px-6 py-3 text-xs text-slate-500">
-              {fmtNumber(uploadData.data_quality.total_nulls)} missing values detected — they'll be
-              interpolated during preprocessing.
-            </p>
-          )}
-        </Card>
-      </div>
-    </div>
+        )}
+
+        {step === "config" && uploadData && (
+          <div className="space-y-6">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold text-slate-600 uppercase">File Info</p>
+              <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
+                <div>
+                  <p className="text-slate-500 text-xs">Rows</p>
+                  <p className="font-semibold text-slate-900">{uploadData.shape?.rows}</p>
+                </div>
+                <div>
+                  <p className="text-slate-500 text-xs">Columns</p>
+                  <p className="font-semibold text-slate-900">{uploadData.shape?.cols}</p>
+                </div>
+                <div>
+                  <p className="text-slate-500 text-xs">Frequency</p>
+                  <p className="font-semibold text-slate-900">{uploadData.suggestions?.frequency}</p>
+                </div>
+              </div>
+            </div>
+
+            {uploadData.validation?.warnings?.length > 0 && (
+              <Alert className="bg-yellow-50 border-yellow-200 text-yellow-900">
+                <AlertCircle className="h-4 w-4 text-yellow-600" />
+                <AlertTitle className="text-yellow-900">Warnings</AlertTitle>
+                <AlertDescription>
+                  <ul className="list-disc pl-5 mt-2 space-y-1 text-xs">
+                    {uploadData.validation.warnings.map((w, i) => (
+                      <li key={i}>{w}</li>
+                    ))}
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            )}
+
+            <div className="grid gap-6 sm:grid-cols-3">
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase text-slate-600">
+                  Date Column
+                </label>
+                <Select value={selectedDateCol} onValueChange={setSelectedDateCol}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="— Select date —" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {dateColumns.map((col) => (
+                      <SelectItem key={col} value={col}>{col}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase text-slate-600">
+                  Target Column
+                </label>
+                <Select value={selectedTargetCol} onValueChange={setSelectedTargetCol}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="— Select target —" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {numericColumns.map((col) => (
+                      <SelectItem key={col} value={col}>{col}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase text-slate-600">
+                  Forecast Horizon
+                </label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="365"
+                  value={forecastHorizon}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '') setForecastHorizon('');
+                    else setForecastHorizon(Math.max(1, parseInt(val) || 1));
+                  }}
+                  className="[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  placeholder="Days (e.g. 30)"
+                />
+              </div>
+            </div>
+
+            {groupingColumns.length > 0 && (
+              <div className="space-y-2">
+                <label className="text-xs font-semibold uppercase text-slate-600">
+                  Group By (optional)
+                </label>
+                <Select value={selectedGroupCol} onValueChange={setSelectedGroupCol}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="None — aggregate whole dataset" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None — aggregate whole dataset</SelectItem>
+                    {groupingColumns.map((col) => (
+                      <SelectItem key={col} value={col}>{col}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-slate-500">
+                  Adds a per-group sales ranking below the main forecast, with the option to forecast an individual one.
+                </p>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase text-slate-600">
+                Country (optional — for holiday effects)
+              </label>
+              <Select value={selectedCountry} onValueChange={setSelectedCountry}>
+                <SelectTrigger>
+                  <SelectValue placeholder="None — no holiday effects" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">None — no holiday effects</SelectItem>
+                  {COUNTRY_OPTIONS.map(({ code, label }) => (
+                    <SelectItem key={code} value={code}>{label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-slate-500">
+                Lets the Prophet model account for that country's public holidays.
+              </p>
+            </div>
+
+
+            <div className="flex gap-4 pt-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setFile(null);
+                  setUploadData(null);
+                  setStep("upload");
+                }}
+                className="flex-1"
+              >
+                Back
+              </Button>
+              <Button
+                onClick={handleRunForecast}
+                disabled={!selectedDateCol || !selectedTargetCol || loading}
+                className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Running...
+                  </>
+                ) : (
+                  "Run Forecast"
+                )}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {step === "running" && (
+          <div className="flex flex-col items-center gap-4 py-12">
+            <Loader2 className="h-12 w-12 animate-spin text-blue-600" />
+            <div className="text-center">
+              <p className="text-sm font-medium text-slate-900">Training models...</p>
+              <p className="text-xs text-slate-500 mt-1">This may take a few minutes</p>
+            </div>
+          </div>
+        )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

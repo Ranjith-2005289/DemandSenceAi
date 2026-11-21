@@ -13,13 +13,15 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Button, Card, CardHeader, Icon } from "./ui";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Download } from "lucide-react";
 import { fmtCompact, fmtNumber, isNum, modelLabel } from "../lib/format";
 
 const COLORS = {
   history: "#64748b",   // slate-500
-  forecast: "#4f46e5",  // brand-600
-  band: "#6366f1",      // brand-500
+  forecast: "#2563eb",  // blue-600
+  band: "#3b82f6",      // blue-500
   grid: "#eef2f6",
 };
 
@@ -103,28 +105,30 @@ export default function ForecastCharts({ results }) {
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader
-          title="Forecast"
-          subtitle={`${modelLabel(best.best_model_name)} · ${results.forecast_dates.length} periods ahead${hasBand ? " · shaded band is the 95% interval" : ""}`}
-          actions={
-            <>
-              <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-medium">
-                {RANGES.map((r) => (
-                  <button
-                    key={r.id}
-                    type="button"
-                    onClick={() => setRange(r.id)}
-                    className={`rounded-md px-2.5 py-1 transition ${range === r.id ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}
-                  >
-                    {r.label}
-                  </button>
-                ))}
-              </div>
-              <span className="hidden text-xs text-slate-400 sm:inline">periods of history</span>
-            </>
-          }
-        />
+      <Card className="shadow-sm">
+        <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 px-6 pt-5">
+          <div>
+            <CardTitle className="text-lg font-semibold text-slate-900">Forecast</CardTitle>
+            <p className="mt-1 text-sm text-slate-500">
+              {`${modelLabel(best.best_model_name)} · ${results.forecast_dates.length} periods ahead${hasBand ? " · shaded band is the 95% interval" : ""}`}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="inline-flex rounded-lg bg-slate-100 p-0.5 text-xs font-medium">
+              {RANGES.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => setRange(r.id)}
+                  className={`rounded-md px-2.5 py-1 transition ${range === r.id ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+            <span className="hidden text-xs text-slate-400 sm:inline">periods of history</span>
+          </div>
+        </CardHeader>
         <div className="h-[380px] px-2 pb-4 pt-4 sm:px-4">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={data} margin={{ top: 8, right: 16, left: 4, bottom: 0 }}>
@@ -144,8 +148,8 @@ export default function ForecastCharts({ results }) {
           <button type="button" onClick={() => setShowTable((v) => !v)} className="text-xs font-medium text-slate-600 hover:text-slate-900">
             {showTable ? "Hide" : "Show"} forecast table
           </button>
-          <Button variant="secondary" size="sm" onClick={() => downloadCsv(results)}>
-            <Icon.Download width={14} height={14} /> Download CSV
+          <Button variant="outline" size="sm" onClick={() => downloadCsv(results)} className="gap-1.5">
+            <Download className="h-3.5 w-3.5" /> Download CSV
           </Button>
         </div>
         {showTable && (
@@ -175,8 +179,11 @@ export default function ForecastCharts({ results }) {
       </Card>
 
       {importanceData.length > 0 && (
-        <Card>
-          <CardHeader title="What drives the forecast" subtitle={`Top features by importance in ${modelLabel(best.best_model_name)}`} />
+        <Card className="shadow-sm">
+          <CardHeader className="px-6 pt-5">
+            <CardTitle className="text-lg font-semibold text-slate-900">What drives the forecast</CardTitle>
+            <p className="text-sm text-slate-500">{`Top features by importance in ${modelLabel(best.best_model_name)}`}</p>
+          </CardHeader>
           <div className="px-4 py-4" style={{ height: importanceData.length * 34 + 40 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={importanceData} layout="vertical" margin={{ top: 0, right: 24, left: 8, bottom: 0 }} barSize={14}>
