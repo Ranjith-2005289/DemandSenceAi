@@ -1,94 +1,194 @@
-@import "tw-animate-css";
-@import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
+@import "@fontsource-variable/inter";
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: light;
-}
-
-body {
-  @apply bg-slate-50 text-slate-900 antialiased;
-}
-
+/*
+  DemandSense design tokens.
+  Navy shell, white panels on a cool grey canvas, one corporate-blue accent.
+  Colour carries meaning only: brand = interactive/selected, ok/warn/bad = status.
+*/
 @layer base {
-  .theme {
-    --font-heading: var(--font-sans);
-    --font-sans: 'Geist Variable', sans-serif;
-  }
   :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    color-scheme: light;
+
+    --app-bg: #f2f4f7;
+    --surface: #ffffff;
+    --surface-muted: #f7f8fa;
+    --surface-hover: #f1f4f8;
+    --line: #e1e6ed;
+    --line-strong: #c8d0db;
+
+    --ink: #142235;
+    --ink-2: #44536a;
+    --ink-3: #75839a;
+
+    --brand: #0a5ad4;
+    --brand-hover: #0849ad;
+    --brand-soft: #e9f0fc;
+    --brand-ink: #0a4fb8;
+
+    --nav: #0e1f38;
+    --nav-hover: #172c4b;
+    --nav-active: #1d375e;
+    --nav-ink: #a9b7cb;
+    --nav-ink-active: #ffffff;
+    --nav-line: #1f3352;
+
+    --ok: #18794e;
+    --ok-soft: #e7f4ed;
+    --warn: #9a5b00;
+    --warn-soft: #fcf1dd;
+    --bad: #be2f2a;
+    --bad-soft: #fbeaea;
+
+    --chart-actual: #6b7a90;
+    --chart-forecast: #0a5ad4;
+    --chart-band: #0a5ad4;
+    --chart-grid: #eceff3;
+    --chart-axis: #75839a;
+    --chart-alert: #be2f2a;
+    --chart-1: #0a5ad4;
+    --chart-2: #1f8a70;
+    --chart-3: #b4690e;
+    --chart-4: #7b4bc4;
+    --chart-other: #9aa6b6;
+
+    --focus: 0 0 0 3px rgba(10, 90, 212, 0.22);
+    --shadow-panel: 0 1px 2px rgba(16, 32, 56, 0.05);
+    --shadow-pop: 0 8px 24px rgba(16, 32, 56, 0.14);
   }
+
   .dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+    color-scheme: dark;
+
+    --app-bg: #0c1420;
+    --surface: #131d2c;
+    --surface-muted: #172334;
+    --surface-hover: #1b293d;
+    --line: #243349;
+    --line-strong: #31445f;
+
+    --ink: #e5ebf3;
+    --ink-2: #a9b5c6;
+    --ink-3: #7d8ba0;
+
+    --brand: #3d86f5;
+    --brand-hover: #5c99f7;
+    --brand-soft: #16294a;
+    --brand-ink: #7fb0fa;
+
+    --nav: #09111c;
+    --nav-hover: #111c2c;
+    --nav-active: #18283f;
+    --nav-ink: #8e9cb1;
+    --nav-ink-active: #ffffff;
+    --nav-line: #172335;
+
+    --ok: #4cc08a;
+    --ok-soft: #12301f;
+    --warn: #e2a23c;
+    --warn-soft: #33260f;
+    --bad: #f0706a;
+    --bad-soft: #3a1a1a;
+
+    --chart-actual: #8695ab;
+    --chart-forecast: #5c99f7;
+    --chart-band: #5c99f7;
+    --chart-grid: #1f2c3f;
+    --chart-axis: #7d8ba0;
+    --chart-alert: #f0706a;
+    --chart-1: #5c99f7;
+    --chart-2: #3fb594;
+    --chart-3: #e0a04a;
+    --chart-4: #a585e6;
+    --chart-other: #5d6b80;
+
+    --focus: 0 0 0 3px rgba(92, 153, 247, 0.3);
+    --shadow-panel: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-pop: 0 10px 28px rgba(0, 0, 0, 0.45);
   }
+
+  *,
+  ::before,
+  ::after {
+    border-color: var(--line);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
   body {
-    @apply bg-background text-foreground;
+    background: var(--app-bg);
+    color: var(--ink);
+    font-family: "Inter Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "cv11", "ss01";
   }
-  html {
-    @apply font-sans;
+
+  :focus-visible {
+    outline: none;
+    box-shadow: var(--focus);
+  }
+
+  ::selection {
+    background: var(--brand-soft);
+  }
+}
+
+@layer components {
+  /* Dense data tables shared by every grid in the app. */
+  .data-table {
+    @apply w-full border-collapse text-[13px];
+  }
+  .data-table thead th {
+    @apply sticky top-0 z-[1] whitespace-nowrap border-b border-line bg-surface-muted px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-ink-3;
+  }
+  .data-table tbody td {
+    @apply border-b border-line px-3 py-2 align-middle text-ink;
+  }
+  .data-table tbody tr:last-child td {
+    @apply border-b-0;
+  }
+  .data-table tbody tr:hover td {
+    @apply bg-surface-hover;
+  }
+  .num,
+  .data-table thead th.num,
+  .data-table tbody td.num {
+    @apply text-right tabular-nums;
+  }
+
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+}
+
+@media print {
+  aside,
+  header,
+  .no-print {
+    display: none !important;
+  }
+  html,
+  body,
+  #root {
+    height: auto;
+    background: #fff;
+  }
+  #root > div,
+  main {
+    height: auto !important;
+    overflow: visible !important;
+  }
+  section {
+    break-inside: avoid;
+    box-shadow: none !important;
   }
 }

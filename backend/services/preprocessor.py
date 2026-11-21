@@ -14,7 +14,9 @@ Pipeline:
 """
 
 import logging
+import re
 import warnings
+import numpy as np
 import pandas as pd
 from typing import Optional
 
@@ -85,15 +87,99 @@ def build_future_exog(
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+# "03/04/2023", "3-4-23", "03.04.2023 08:15" — day and month are both numbers,
+# so the order is ambiguous whenever both are ≤ 12.
+_NUMERIC_DMY = re.compile(r"^\s*(\d{1,2})([/.\-])(\d{1,2})\2(\d{4}|\d{2})(?=$|[\sT])(.*)$")
+
+
+def _grid_coverage(dates: pd.Series) -> float:
+    """
+    How completely the parsed dates fill a regular calendar: unique dates
+    divided by the slots a regular grid at the median spacing would have.
+    A correct reading of a monthly series scores ~1.0; reading day-first
+    monthly dates month-first piles them into a few days of January
+    (median gap 1 day over a 3-year span) and scores ~0.03.
+    """
+    u = pd.Series(dates.dropna().unique()).sort_values()
+    if len(u) < 3:
+        return 0.0
+    gaps = u.diff().dropna()
+    median_gap = gaps.median()
+    if median_gap <= pd.Timedelta(0):
+        return 0.0
+    slots = (u.iloc[-1] - u.iloc[0]) / median_gap + 1
+    return float(len(u) / slots)
+
+
+def _resolve_numeric_date_order(series: pd.Series):
+    """
+    For purely numeric dates (dd/mm/yyyy vs mm/dd/yyyy), parse the WHOLE
+    column under both readings and keep the one that is valid and forms a
+    regular calendar. Element-wise parsers swap order per value when the day
+    exceeds 12, mixing both readings in one column; this never does.
+
+    Returns (parsed_series, order, ambiguous) or None if the column is not
+    in that numeric form.
+    """
+    s = series.dropna().astype(str)
+    if s.empty:
+        return None
+    m = s.str.extract(_NUMERIC_DMY)
+    if m[0].notna().mean() < 0.8:
+        return None
+
+    full = series.astype(str).str.extract(_NUMERIC_DMY)
+    a, b = pd.to_numeric(full[0], errors="coerce"), pd.to_numeric(full[2], errors="coerce")
+    year = pd.to_numeric(full[3], errors="coerce")
+    year = year.where(full[3].str.len() == 4, np.where(year < 69, 2000 + year, 1900 + year))
+    rest = full[4].fillna("").str.strip().str.lstrip("T")
+
+    def build(day, month):
+        iso = (year.astype("Int64").astype(str) + "-" + month.astype("Int64").astype(str).str.zfill(2)
+               + "-" + day.astype("Int64").astype(str).str.zfill(2) + " " + rest).str.strip()
+        return pd.to_datetime(iso.where(full[0].notna()), errors="coerce", format="mixed")
+
+    month_first, day_first = build(b, a), build(a, b)
+    ok_mf, ok_df = month_first.notna().mean(), day_first.notna().mean()
+
+    if ok_mf >= 0.8 and ok_df < 0.8:
+        return month_first, "month-first", False
+    if ok_df >= 0.8 and ok_mf < 0.8:
+        return day_first, "day-first", False
+    if ok_mf < 0.8 and ok_df < 0.8:
+        return None
+    if month_first.equals(day_first):
+        return month_first, "month-first", False
+    # Both readings are valid (every day ≤ 12): pick the one that forms a regular calendar.
+    cov_mf, cov_df = _grid_coverage(month_first), _grid_coverage(day_first)
+    if cov_df > cov_mf * 1.5:
+        return day_first, "day-first", True
+    if cov_mf > cov_df * 1.5:
+        return month_first, "month-first", True
+    return month_first, "month-first", True
+
+
 def _parse_dates(series: pd.Series) -> pd.Series:
     """
     Try every date parsing strategy until one succeeds.
     Handles ISO, European, American, named-month, unix timestamp, and quarterly formats.
+
+    For numeric day/month dates the chosen order is recorded in
+    `result.attrs["date_order"]` (and `attrs["date_order_ambiguous"]`).
     """
 
     # 0. Already datetime
     if pd.api.types.is_datetime64_any_dtype(series):
         return series
+
+    # 0b. Numeric day/month dates: decide the order for the whole column.
+    if not pd.api.types.is_numeric_dtype(series):
+        resolved = _resolve_numeric_date_order(series)
+        if resolved is not None:
+            parsed, order, ambiguous = resolved
+            parsed.attrs["date_order"] = order
+            parsed.attrs["date_order_ambiguous"] = ambiguous
+            return parsed
 
     # 1. Handle quarterly strings like "2023-Q1", "Q1 2023"
     quarterly_pattern = series.astype(str).str.strip().str.match(
@@ -181,6 +267,31 @@ def _parse_dates(series: pd.Series) -> pd.Series:
     )
 
 
+def _uses_decimal_comma(s: pd.Series) -> bool:
+    """
+    Decide the separator convention from the whole column, not per value.
+
+    Unambiguous evidence:  "1,234.56" or "12.5"  → decimal point (US/UK)
+                           "1.234,56" or "12,5"  → decimal comma (European)
+    Ambiguous on its own:  "1,234" is read as thousands (the usual export
+    format), "1.234" as European thousands (the previous behaviour).
+    The old rule matched "1,234" as European "1.234", shrinking US-formatted
+    values 1000×.
+    """
+    s = s.str.replace(r"\s", "", regex=True)
+    point = (
+        s.str.contains(r"\d,\d{3}\.\d", regex=True)
+        | s.str.match(r"^-?\d+\.\d{1,2}$")
+        | s.str.match(r"^-?0\.\d+$")
+    ).sum()
+    comma = (s.str.contains(r"\d\.\d{3},\d", regex=True) | s.str.match(r"^-?\d+,\d{1,2}$")).sum()
+    if comma != point:
+        return comma > point
+    if s.str.match(r"^-?\d{1,3}(,\d{3})+$").any():
+        return False
+    return bool(s.str.match(r"^-?[1-9]\d{0,2}(\.\d{3})+$").mean() > 0.5)
+
+
 def _parse_target(series: pd.Series, col_name: str) -> pd.Series:
     """
     Coerce the target column to float. Handles:
@@ -198,9 +309,8 @@ def _parse_target(series: pd.Series, col_name: str) -> pd.Series:
     s = s.str.replace(r"[$€£¥₹]", "", regex=True)
     s = s.str.replace(r"%", "", regex=True)
 
-    # European format: "1.234,56" → "1234.56"
-    european_mask = s.str.match(r"^\d{1,3}(\.\d{3})*(,\d+)?$")
-    if european_mask.mean() > 0.5:
+    if _uses_decimal_comma(s):
+        # European format: "1.234,56" → "1234.56"
         s = s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
     else:
         # Remove thousands commas: "1,234,567" → "1234567"
@@ -234,46 +344,131 @@ def _infer_frequency(index: pd.DatetimeIndex) -> Optional[str]:
     except Exception:
         pass
 
-    # Estimate from median gap
-    gaps = pd.Series(index).diff().dropna()
-    median_gap = gaps.median()
+    # Estimate from median gap (irregular data). Aliases are pandas 3 ones:
+    # "H"/"T" no longer exist, and passing them made gap filling fail silently.
+    u = pd.Series(index.unique()).sort_values()
+    seconds = u.diff().dropna().median().total_seconds()
+    intraday = bool((u.dt.normalize() != u).any())
+    if seconds <= 90:
+        return "min"
+    if seconds <= 12 * 3600 and intraday:
+        return "h"
+    if seconds <= 86400 * 1.5:
+        span_days = (u.iloc[-1] - u.iloc[0]).days
+        if span_days >= 28 and not (u.dt.dayofweek >= 5).any():
+            return "B"   # trading/business days: don't invent weekends
+        return "D"
+    if seconds <= 86400 * 8:
+        # Anchor weeks on the weekday the data actually uses.
+        day = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"][int(u.dt.dayofweek.mode().iloc[0])]
+        return f"W-{day}"
+    if seconds <= 86400 * 35:
+        return "ME" if u.dt.is_month_end.mean() > 0.5 else "MS"
+    if seconds <= 86400 * 100:
+        return "QE" if u.dt.is_quarter_end.mean() > 0.5 else "QS"
+    return "YE" if u.dt.is_year_end.mean() > 0.5 else "YS"
 
-    seconds = median_gap.total_seconds()
-    if seconds <= 60:
-        return "T"           # minute
-    elif seconds <= 3600:
-        return "H"           # hourly
-    elif seconds <= 86400 * 1.5:
-        return "D"           # daily
-    elif seconds <= 86400 * 8:
-        return "W"           # weekly
-    elif seconds <= 86400 * 35:
-        return "MS"          # monthly
-    elif seconds <= 86400 * 100:
-        return "QS"          # quarterly
-    else:
-        return "YS"          # annual
 
-
-def _fill_date_gaps(series: pd.Series, freq: str) -> pd.Series:
+def _fill_date_gaps(series: pd.Series, freq: str, how: str = "sum") -> tuple[pd.Series, pd.Index, bool]:
     """
-    Reindex to a complete date range so every period exists.
-    Newly created rows have NaN values (filled in the next step).
+    Put the series on a complete, regular grid at `freq`.
+
+    If every timestamp already sits on the grid, reindex (new periods are NaN).
+    If some do not (irregular intraday timestamps, weeks dated on another
+    weekday, month-end vs month-start), aggregate into grid periods with `how`
+    ("sum" for flows, "mean" for levels). Reindexing off-grid data used to
+    drop every point not on the grid: 740 hourly readings became 26.
+
+    Returns (series, empty_periods, resampled).
     """
     try:
-        full_index = pd.date_range(
-            start=series.index.min(),
-            end=series.index.max(),
-            freq=freq,
-        )
-        series = series.reindex(full_index)
-        gaps_added = len(series) - len(series.dropna())
-        if gaps_added > 0:
-            logger.info(f"Filled {gaps_added} missing date gaps (freq={freq})")
+        full_index = pd.date_range(start=series.index.min(), end=series.index.max(), freq=freq)
+        if len(full_index) and series.index.isin(full_index).all():
+            out = series.reindex(full_index)
+            return out, full_index.difference(series.index), False
+        grouped = series.resample(freq)
+        out = grouped.sum(min_count=1) if how == "sum" else grouped.mean()
+        counts = grouped.count()
+        return out, out.index[counts.values == 0], True
     except Exception as e:
-        logger.warning(f"Could not reindex to fill date gaps: {e}")
+        logger.warning(f"Could not regularise the time index (freq={freq}): {e}")
+        return series, pd.Index([]), False
 
-    return series
+
+# Name words that mark a LEVEL (a reading at a point in time: average it,
+# never zero-fill it) rather than a FLOW (an amount during the period: sum
+# it, and zero when nothing was recorded). Everything else is a flow.
+LEVEL_KEYWORDS = {
+    "price", "rate", "temp", "temperature", "humidity", "pressure", "close", "open",
+    "high", "low", "level", "balance", "index", "score", "percent", "pct", "ratio",
+    "avg", "average", "mean", "stock", "inventory", "onhand", "occupancy", "speed",
+    "yield", "margin", "nav", "utilization", "utilisation",
+}
+
+
+def name_tokens(col: str) -> list[str]:
+    """'Paid_Amount' → ['paid', 'amount']; 'StoreID' → ['store', 'id']; 'unitsSold2' → ['units', 'sold', '2']."""
+    return [t.lower() for t in re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+", str(col))]
+
+
+def metric_kind(col: str) -> str:
+    """'level' for readings (price, temperature, stock level…), else 'flow'."""
+    tokens = name_tokens(col)
+    if "on" in tokens and "hand" in tokens:
+        return "level"
+    return "level" if any(t in LEVEL_KEYWORDS for t in tokens) else "flow"
+
+
+def _extreme_spikes(series: pd.Series) -> pd.Series:
+    """
+    Isolated values so far from their neighbours that they are almost
+    certainly data errors (an extra zero, a unit slip): more than 8x the
+    median of the surrounding 15 periods AND beyond 10 IQRs. Recurring
+    peaks (December, weekends) are not flagged because their neighbours are
+    high too; intermittent series (neighbour median 0) are left alone.
+    """
+    s = series.dropna()
+    if len(s) < 15:
+        return pd.Series(False, index=series.index)
+    q1, q3 = s.quantile([0.25, 0.75])
+    iqr = q3 - q1
+    if iqr <= 0:
+        return pd.Series(False, index=series.index)
+    neigh = series.rolling(15, center=True, min_periods=5).median()
+    dev = (series - neigh).abs()
+    mask = (dev > 10 * iqr) & (neigh.abs() > 0) & (dev > 7 * neigh.abs())
+    return mask.fillna(False)
+
+
+def _outlying_dates(index: pd.DatetimeIndex) -> np.ndarray:
+    """
+    Rows whose date sits far outside the bulk of the data: a small cluster
+    of dates at either end separated from the rest by a gap of more than
+    50x the typical spacing (and at least 60 days). Typically a typo such as
+    2032 for 2023, or a 1970 date from a bad epoch value. Left in, gap
+    filling would invent every period in between (3,124 days for one typo).
+    Returns a boolean mask over `index` (True = drop).
+    """
+    drop = np.zeros(len(index), dtype=bool)
+    u = pd.Series(index.unique()).sort_values().reset_index(drop=True)
+    if len(u) < 10:
+        return drop
+    gaps = u.diff()
+    typical = gaps.median()
+    threshold = max(typical * 50, pd.Timedelta(days=60))
+    limit = max(3, int(0.01 * len(u)))
+    lo, hi = 0, len(u) - 1
+    for _ in range(3):  # peel isolated clusters from both ends
+        tail_breaks = [i for i in range(hi, lo, -1) if gaps.iloc[i] > threshold and hi - i + 1 <= limit]
+        if tail_breaks:
+            hi = tail_breaks[-1] - 1
+        head_breaks = [i for i in range(lo + 1, hi + 1) if gaps.iloc[i] > threshold and i - lo <= limit]
+        if head_breaks:
+            lo = head_breaks[-1]
+        if not tail_breaks and not head_breaks:
+            break
+    keep_from, keep_to = u.iloc[lo], u.iloc[hi]
+    return np.asarray((index < keep_from) | (index > keep_to))
 
 
 def _cap_outliers_iqr(
@@ -331,7 +526,7 @@ def preprocess(
     date_col: str,
     target_col: str,
     iqr_multiplier: float = IQR_MULTIPLIER,
-    cap_outliers: bool = True,
+    cap_outliers: bool = False,
     fill_gaps: bool = True,
     feature_cols: Optional[list[str]] = None,
 ) -> tuple[pd.Series, dict]:
@@ -344,7 +539,11 @@ def preprocess(
         target_col     : Name of the numeric column to forecast.
         iqr_multiplier : Sensitivity of outlier capping (default 2.5).
                          Lower = more aggressive, Higher = more lenient.
-        cap_outliers   : Set False to skip outlier capping (e.g. financial data).
+        cap_outliers   : Global IQR capping. Off by default: a single global
+                         bound cannot tell a data error from a real seasonal
+                         peak and erased December peaks in testing (see
+                         DATA_HEALTH_DESIGN.md §2). Kept for benchmarks that
+                         reproduce the earlier behaviour.
         fill_gaps      : Set False to skip gap-filling (already complete series).
         feature_cols   : Optional extra numeric columns (e.g. price, a promo
                          flag) to align to the same index as the target series,
@@ -404,7 +603,17 @@ def preprocess(
 
     # ── 1. Parse date column ──────────────────────────────────────────────────
     try:
-        df[date_col] = _parse_dates(df[date_col])
+        parsed_dates = _parse_dates(df[date_col])
+        date_order = parsed_dates.attrs.get("date_order")
+        if date_order:
+            report["date_order"] = date_order
+            if parsed_dates.attrs.get("date_order_ambiguous"):
+                sample = str(df[date_col].dropna().iloc[0])
+                report["warnings"].append(
+                    f"Dates like '{sample}' could be read day-first or month-first; "
+                    f"read as {date_order} because that gives a regular calendar."
+                )
+        df[date_col] = parsed_dates
         n_unparsed = df[date_col].isna().sum()
         if n_unparsed > 0:
             report["warnings"].append(
@@ -454,6 +663,19 @@ def preprocess(
     if df.index.tz is not None:
         df.index = df.index.tz_localize(None)
 
+    outlying = _outlying_dates(df.index)
+    if outlying.any():
+        dropped = sorted({str(d.date()) for d in df.index[outlying]})
+        df = df[~outlying]
+        msg = (
+            f"{int(outlying.sum())} row(s) dated {', '.join(dropped[:3])}"
+            f"{' …' if len(dropped) > 3 else ''} were excluded: they lie far outside the rest of the "
+            f"data ({str(df.index.min().date())} – {str(df.index.max().date())}), separated by a long gap; "
+            f"they look like test entries or typos."
+        )
+        report["warnings"].append(msg)
+        report["steps"].append(f"[3b] {msg}")
+
     # Snapshot exog columns now — deduped/aligned separately from the target
     # below, since "sum duplicate timestamps" (right for demand) is the wrong
     # aggregation for a price or promo-flag column: promo-type columns take
@@ -478,18 +700,56 @@ def preprocess(
 
     # ── 4. Remove duplicate timestamps (smart handling) ───────────────────────
     n_before = len(df)
-    if df.index.duplicated().any():
+    aggregated_by_sum = False
+    kind = metric_kind(target_col)
+    report["metric_kind"] = kind
+    if df.index.duplicated().any() and kind == "level":
+        # Several readings per period of a level (price, temperature, stock
+        # on hand): their total means nothing, their average does.
         n_dupes = int(df.index.duplicated().sum())
-        
-        # Strategy: Aggregate duplicate timestamps by summing them
-        # This is standard for retail/sales data where we want total daily/weekly demand
-        df = df.groupby(level=0).sum(numeric_only=True)
-        df = df.sort_index()
-        
-        report["steps"].append(
-            f"[4] Removed {n_dupes} duplicate timestamps (aggregated by sum). "
-            f"({n_before} → {len(df)} rows)"
+        df = df.groupby(level=0).mean(numeric_only=True).sort_index()
+        report["warnings"].append(
+            f"'{target_col}' looks like a reading (not an amount), so rows sharing a date "
+            f"({n_dupes} extra) were averaged, not added up."
         )
+        report["steps"].append(f"[4] {n_before} readings averaged into {len(df)} periods (level metric).")
+    elif df.index.duplicated().any():
+        n_dupes = int(df.index.duplicated().sum())
+        n_unique = int(df.index.nunique())
+        unique_idx = df.index.unique().sort_values()
+        sub_daily = len(unique_idx) > 2 and pd.Series(unique_idx).diff().median() < pd.Timedelta(days=1)
+        dup_ts = df.index[df.index.duplicated()]
+        years = max(1, int((unique_idx[-1] - unique_idx[0]).days // 365) + 1)
+        repeated_readings = (
+            sub_daily
+            and n_dupes <= years * 2
+            and int(df.index.value_counts().max()) == 2
+            # Clock changes happen at night in March/April and October/November.
+            and bool(((dup_ts.hour <= 3) & dup_ts.month.isin([3, 4, 10, 11])).all())
+        )
+        if repeated_readings:
+            # Sub-daily data with one row per timestamp except a rare repeat:
+            # a daylight-saving clock change or a re-sent reading, not two
+            # separate sales. Summing would create a false 2x spike.
+            df = df.groupby(level=0).mean(numeric_only=True)
+            report["warnings"].append(
+                f"{n_dupes} timestamp(s) appeared twice (for example a daylight-saving clock change); "
+                "their values were averaged."
+            )
+            report["steps"].append(
+                f"[4] {n_dupes} repeated timestamps averaged ({n_before} → {len(df)} rows)."
+            )
+        else:
+            # Many rows per period: individual records (transactions, stores,
+            # products) — total them. min_count=1 keeps a period whose values
+            # are all blank as missing instead of turning it into 0.
+            df = df.groupby(level=0).sum(numeric_only=True, min_count=1)
+            aggregated_by_sum = True
+            report["steps"].append(
+                f"[4] {n_before} rows combined into {len(df)} period totals "
+                f"(several rows per date were summed)."
+            )
+        df = df.sort_index()
     else:
         report["steps"].append("[4] No duplicate timestamps found.")
 
@@ -501,18 +761,54 @@ def preprocess(
     report["inferred_frequency"] = freq or "unknown"
 
     if fill_gaps and freq:
-        n_before_gap = len(series)
-        series = _fill_date_gaps(series, freq)
-        n_gaps_added = len(series) - n_before_gap
-        report["steps"].append(
-            f"[5] Date gaps filled — added {n_gaps_added} missing periods "
-            f"(freq={freq}, total rows now: {len(series)})."
-        )
+        n_rows_before = len(series)
+        series, empty, resampled = _fill_date_gaps(series, freq, "mean" if kind == "level" else "sum")
+        if resampled:
+            aggregated_by_sum = aggregated_by_sum or kind == "flow"
+            msg = (
+                f"Timestamps did not fall on a regular {freq} grid; {n_rows_before} rows were "
+                f"{'averaged' if kind == 'level' else 'totalled'} into {len(series)} periods."
+            )
+            report["warnings"].append(msg)
+            report["steps"].append(f"[5a] {msg}")
+        n_gaps_added = len(empty)
+        sparse = n_gaps_added >= 0.2 * len(series)
+        if n_gaps_added and (aggregated_by_sum or sparse) and kind == "flow" and series.min() >= 0:
+            # Rows were individual records summed per period, so a period
+            # with no rows had none: zero, not an interpolated guess.
+            series.loc[empty] = 0.0
+            reason = (
+                "rows are individual records totalled per period"
+                if aggregated_by_sum
+                else f"{n_gaps_added} of {len(series)} periods are empty, so '{target_col}' looks like event data"
+            )
+            report["warnings"].append(f"{n_gaps_added} period(s) had no records and were counted as 0 ({reason}).")
+            report["steps"].append(
+                f"[5] {n_gaps_added} periods with no records set to 0 "
+                f"(freq={freq}, total rows now: {len(series)})."
+            )
+        else:
+            report["steps"].append(
+                f"[5] Date gaps filled — added {n_gaps_added} missing periods "
+                f"(freq={freq}, total rows now: {len(series)})."
+            )
     else:
         report["steps"].append(
             f"[5] Gap filling skipped (freq={'not inferred' if not freq else freq}, "
             f"fill_gaps={fill_gaps})."
         )
+
+    # ── 5b. Extreme isolated spikes (data errors) → missing ──────────────────
+    spikes = _extreme_spikes(series)
+    if spikes.any():
+        examples = ", ".join(f"{series[d]:,.0f} on {d.date()}" for d in series.index[spikes][:3])
+        series[spikes] = np.nan
+        msg = (
+            f"{int(spikes.sum())} value(s) ({examples}) were far outside the surrounding values "
+            "(over 8x) and look like data errors; they were replaced by estimates."
+        )
+        report["warnings"].append(msg)
+        report["steps"].append(f"[5b] {msg}")
 
     # ── 6. Fill missing values ────────────────────────────────────────────────
     n_missing_before = int(series.isna().sum())
@@ -557,28 +853,9 @@ def preprocess(
         )
     else:
         report["outliers"] = {"n_outliers": 0}
-        report["steps"].append("[7] Outlier capping skipped.")
-
-    # ── 8. Smooth extreme noise (optional rolling median correction) ──────────
-    # For very high-frequency data (hourly/minute), a light smooth improves model accuracy
-    if freq and freq in ("T", "H") and len(series) > 48:
-        window = 3
-        smoothed = series.rolling(window=window, center=True, min_periods=1).median()
-        # Only smooth points that are more than 2 std from rolling median (true noise)
-        deviation = (series - smoothed).abs()
-        threshold = deviation.std() * 2
-        noise_mask = deviation > threshold
-        n_smoothed = int(noise_mask.sum())
-        if n_smoothed > 0:
-            series[noise_mask] = smoothed[noise_mask]
-            report["steps"].append(
-                f"[8] High-frequency smoothing: {n_smoothed} noisy points corrected "
-                f"(rolling median, window={window})."
-            )
-        else:
-            report["steps"].append("[8] High-frequency smoothing: no noisy points detected.")
-    else:
-        report["steps"].append("[8] High-frequency smoothing skipped.")
+        report["steps"].append(
+            "[7] Outlier capping off: unusual values are kept; models are compared on held-out data instead."
+        )
 
     # ── 8b. Align exog columns to the final series index ─────────────────────
     if exog_raw is not None:
