@@ -32,7 +32,8 @@ export const runForecast = async (
   group_col = null,
   group_value = null,
   country = null,
-  session_id = null
+  session_id = null,
+  feature_cols = null
 ) => {
   const payload = {
     filename,
@@ -42,6 +43,7 @@ export const runForecast = async (
     ...(group_col ? { group_col, group_value } : {}),
     ...(country ? { country } : {}),
     ...(session_id ? { session_id } : {}),
+    ...(feature_cols?.length ? { feature_cols } : {}),
   };
   const { data } = await api.post("/forecast", payload);
   return data;
@@ -100,3 +102,8 @@ export const askChat = async ({ question, session_id, forecast_data, product_sum
 };
 
 export const resetChat = (session_id) => api.post(`/api/chat/reset/${session_id}`);
+
+export const getHealth = async () => {
+  const { data } = await api.get("/health", { timeout: 5000 });
+  return data;
+};

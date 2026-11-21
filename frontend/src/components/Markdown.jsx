@@ -13,8 +13,8 @@ function inline(text, keyPrefix) {
     if (m.index > last) out.push(text.slice(last, m.index));
     const tok = m[0];
     const k = `${keyPrefix}-${i++}`;
-    if (tok.startsWith("**")) out.push(<strong key={k} className="font-semibold text-slate-900">{tok.slice(2, -2)}</strong>);
-    else if (tok.startsWith("`")) out.push(<code key={k} className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[0.85em]">{tok.slice(1, -1)}</code>);
+    if (tok.startsWith("**")) out.push(<strong key={k} className="font-semibold text-ink">{tok.slice(2, -2)}</strong>);
+    else if (tok.startsWith("`")) out.push(<code key={k} className="rounded bg-surface-muted px-1 py-0.5 font-mono text-[0.85em]">{tok.slice(1, -1)}</code>);
     else out.push(<em key={k}>{tok.slice(1, -1)}</em>);
     last = m.index + tok.length;
   }
@@ -63,17 +63,17 @@ export default function Markdown({ text }) {
   return (
     <div className="space-y-2">
       {blocks.map((b, i) => {
-        if (b.type === "hr") return <hr key={i} className="border-slate-200" />;
+        if (b.type === "hr") return <hr key={i} className="border-line" />;
         if (b.type === "h")
           return (
-            <p key={i} className={`${b.level <= 2 ? "text-[15px]" : "text-sm"} pt-1 font-semibold text-slate-900`}>
+            <p key={i} className={`${b.level <= 2 ? "text-[15px]" : "text-sm"} pt-1 font-semibold text-ink`}>
               {inline(b.text, `h${i}`)}
             </p>
           );
         if (b.type === "list") {
           const Tag = b.ordered ? "ol" : "ul";
           return (
-            <Tag key={i} className={`space-y-1 pl-5 ${b.ordered ? "list-decimal" : "list-disc"} marker:text-slate-400`}>
+            <Tag key={i} className={`space-y-1 pl-5 ${b.ordered ? "list-decimal" : "list-disc"} marker:text-ink-3`}>
               {b.items.map((it, j) => (
                 <li key={j} className={it.indent ? "ml-4" : ""}>{inline(it.text, `l${i}-${j}`)}</li>
               ))}
