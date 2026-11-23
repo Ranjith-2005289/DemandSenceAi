@@ -135,7 +135,16 @@ function MapStep() {
   const ready = config.dateCol && config.targetCol && horizonOk && blockingErrors.length === 0;
   const columns = upload.columns || [];
   const preview = upload.preview || [];
-  const exog = [...(d.exog_columns?.price_cols || []), ...(d.exog_columns?.promo_cols || [])];
+  // The target itself is never offered as a driver of itself.
+  const exog = [...(d.exog_columns?.price_cols || []), ...(d.exog_columns?.promo_cols || [])].filter(
+    (c) => c !== config.targetCol
+  );
+  const chosen = config.featureCols || [];
+  const toggleDriver = (c) =>
+    setConfig((cfg) => {
+      const cur = cfg.featureCols || [];
+      return { ...cfg, featureCols: cur.includes(c) ? cur.filter((x) => x !== c) : [...cur, c] };
+    });
 
   return (
     <div className="space-y-4">
@@ -216,9 +225,35 @@ function MapStep() {
             <Field label="Holiday calendar" htmlFor="f-country" hint="Public holidays are used by the Prophet model.">
               <Select id="f-country" value={config.country} onChange={set("country")} placeholder="None" options={COUNTRIES} />
             </Field>
-            <Field label="External drivers" hint="Price and promotion columns used by XGBoost, Random Forest and SARIMAX.">
+            <Field
+              label="External drivers"
+              hint="Off by default. Models must assume future values (last price carried forward, no promotions), which often lowers accuracy. Turn one on only if it really drives demand."
+            >
               <div className="flex min-h-[32px] flex-wrap items-center gap-1.5">
-                {exog.length ? exog.map((c) => <Chip key={c}>{c}</Chip>) : <span className="text-[13px] text-ink-3">None detected</span>}
+                {exog.length ? (
+                  exog.map((c) => {
+                    const on = chosen.includes(c);
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        role="switch"
+                        aria-checked={on}
+                        onClick={() => toggleDriver(c)}
+                        className={cn(
+                          "inline-flex items-center gap-1.5 rounded border px-2 py-0.5 text-xs font-medium transition-colors",
+                          on ? "border-brand bg-brand-soft text-brand-ink" : "border-line-strong text-ink-2 hover:bg-surface-hover"
+                        )}
+                      >
+                        <span className={cn("h-2 w-2 rounded-full", on ? "bg-brand" : "bg-line-strong")} />
+                        {c}
+                        <span className="text-ink-3">{on ? "On" : "Off"}</span>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <span className="text-[13px] text-ink-3">None detected</span>
+                )}
               </div>
             </Field>
           </PanelBody>

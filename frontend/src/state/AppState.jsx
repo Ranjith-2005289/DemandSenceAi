@@ -14,7 +14,8 @@ import {
 // stays) while the user moves between pages.
 const AppStateContext = createContext(null);
 
-const EMPTY_CONFIG = { dateCol: "", targetCol: "", groupCol: "", country: "", horizon: 30 };
+// featureCols: external drivers the user switched on (off by default).
+const EMPTY_CONFIG = { dateCol: "", targetCol: "", groupCol: "", country: "", horizon: 30, featureCols: [] };
 
 export function AppStateProvider({ children }) {
   const [sessionId] = useState(() => crypto.randomUUID());
@@ -97,11 +98,8 @@ export function AppStateProvider({ children }) {
       groupCol: config.groupCol || null,
       country: config.country || null,
       horizon: Number(config.horizon) || 30,
-      // Detected price/promo columns, used by XGBoost, Random Forest and SARIMAX.
-      featureCols: [
-        ...(upload.detected?.exog_columns?.price_cols || []),
-        ...(upload.detected?.exog_columns?.promo_cols || []),
-      ],
+      // Drivers the user switched on (used by XGBoost, Random Forest and SARIMAX).
+      featureCols: (config.featureCols || []).filter((c) => c !== config.targetCol),
     };
     const startedAt = Date.now();
     setRun({ status: "running", error: null, startedAt, finishedAt: null });

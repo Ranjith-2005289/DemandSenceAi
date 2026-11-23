@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 
 import re
 
-from services.preprocessor import PRICE_KEYWORDS, PROMO_KEYWORDS, _parse_dates, name_tokens as _name_tokens
+from services.preprocessor import PRICE_KEYWORDS, PROMO_KEYWORDS, _parse_dates, metric_kind, name_tokens as _name_tokens
 
 router = APIRouter()
 
@@ -70,6 +70,22 @@ def _is_non_target_name(col: str) -> bool:
     return any(t.endswith("id") and t[:-2] in ID_SUFFIX_ENTITIES for t in tokens)
 
 
+# Calendar parts and pandas' saved index column are never forecast targets.
+NON_TARGET_KEYWORDS |= {"unnamed", "year", "month", "week", "weekday", "day", "quarter", "hour", "minute"}
+
+GROUP_CODE_TOKENS = {
+    "store", "shop", "branch", "outlet", "product", "item", "sku", "category", "dept",
+    "department", "region", "location", "warehouse", "channel", "segment", "brand",
+}
+
+
+def _is_group_code(series: pd.Series, col: str) -> bool:
+    """Integer codes like Store = 1..45: a dimension to group by, not a number to forecast."""
+    if not pd.api.types.is_integer_dtype(series):
+        return False
+    return bool(set(_name_tokens(col)) & GROUP_CODE_TOKENS) and series.nunique() <= 1000
+
+
 # Columns likely to be grouping / categorical dimensions
 GROUPING_KEYWORDS = {
     "product", "item", "sku", "category", "brand", "store",
@@ -92,6 +108,34 @@ FREQ_MAP = {
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def _try_parse_numeric_dates(series: pd.Series) -> pd.Series | None:
+    """
+    A numeric column is a date only if it holds epoch seconds/milliseconds in
+    a plausible range or yyyymmdd integers (20230105). Everything else stays
+    numeric: the generic fallbacks read any number as nanoseconds since 1970,
+    which turned 'Weekly_Sales' and 'Holiday_Flag' into "date" columns and hid
+    them from the target list.
+    """
+    s = series.dropna()
+    if s.empty:
+        return None
+    if s.between(946_684_800, 4_102_444_800).mean() >= 0.8:            # epoch seconds, 2000-2100
+        parsed = pd.to_datetime(s, unit="s", errors="coerce")
+        return parsed if parsed.notna().mean() >= 0.8 else None
+    if s.between(946_684_800_000, 4_102_444_800_000).mean() >= 0.8:    # epoch milliseconds
+        parsed = pd.to_datetime(s, unit="ms", errors="coerce")
+        return parsed if parsed.notna().mean() >= 0.8 else None
+    if (s % 1 == 0).all() and s.between(18000101, 21001231).mean() >= 0.8:  # yyyymmdd
+        parsed = pd.to_datetime(s.astype("int64").astype(str), format="%Y%m%d", errors="coerce")
+        return parsed if parsed.notna().mean() >= 0.8 else None
+    return None
+
+
+def _is_text(series: pd.Series) -> bool:
+    """Text column under pandas 2 (object) or pandas 3 (str dtype)."""
+    return pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series)
+
+
 def _try_parse_date_series(series: pd.Series) -> pd.Series | None:
     """Try to parse a Series as dates. Returns parsed Series or None."""
     # 1. Let pandas infer (fastest path) — but ONLY for non-numeric (string/
@@ -109,6 +153,9 @@ def _try_parse_date_series(series: pd.Series) -> pd.Series | None:
     # "Weekly_Sales" gets silently misclassified as a date column before
     # step 2's proper 2000-2100 plausible-range gate ever runs. Deferring
     # numeric series to step 2 (which is range-gated) closes that hole.
+    if pd.api.types.is_numeric_dtype(series):
+        return _try_parse_numeric_dates(series)
+
     if not pd.api.types.is_numeric_dtype(series):
         try:
             parsed = pd.to_datetime(series, errors="raise")
@@ -188,8 +235,15 @@ def _detect_date_columns(df: pd.DataFrame) -> dict[str, str]:
             or col_lower.endswith("_at")
         )
 
-        # Also try object/string columns regardless of name (catches unlabeled cols)
-        if df[col].dtype == object or name_looks_like_date:
+        # Annual data: an integer 'Year' column of plausible years
+        if pd.api.types.is_integer_dtype(df[col]) and "year" in _name_tokens(col):
+            vals = df[col].dropna()
+            if len(vals) and vals.between(1800, 2100).all():
+                date_cols[col] = str(vals.iloc[0])
+                continue
+
+        # Also try text columns regardless of name (catches unlabeled cols)
+        if _is_text(df[col]) or name_looks_like_date:
             sample_vals = df[col].dropna().head(50)
             if sample_vals.empty:
                 continue
@@ -213,8 +267,8 @@ def _detect_numeric_columns(df: pd.DataFrame, date_cols: list[str]) -> dict[str,
 
         col_lower = col.lower().replace(" ", "_")
 
-        # Skip obvious non-targets (IDs, codes, coordinates, flags)
-        if _is_non_target_name(col):
+        # Skip obvious non-targets (IDs, codes, coordinates, flags, calendar parts)
+        if _is_non_target_name(col) or _is_group_code(df[col], col):
             continue
 
         series = df[col].dropna()
@@ -247,6 +301,29 @@ def _detect_numeric_columns(df: pd.DataFrame, date_cols: list[str]) -> dict[str,
     return numeric_meta
 
 
+STRONG_TARGET_WORDS = {
+    "sales", "sale", "sold", "revenue", "demand", "quantity", "qty", "units", "volume",
+    "orders", "total", "transactions", "trips", "passengers", "visitors", "calls",
+    "consumption", "kwh", "mwh", "production", "shipments", "bookings",
+}
+WEAK_TARGET_WORDS = {"amount", "value", "count", "cost", "profit", "spend"}
+
+
+def _target_score(col: str, meta: dict) -> int:
+    """
+    Rank candidate targets: amounts of demand first, readings (price,
+    temperature) last. The first likely-looking column used to win, so
+    Walmart defaulted to Temperature and DMart to UnitPrice.
+    Ties keep column order (max returns the first maximum).
+    """
+    tokens = set(_name_tokens(col))
+    score = 3 * bool(tokens & STRONG_TARGET_WORDS) + 2 * bool(tokens & WEAK_TARGET_WORDS)
+    score += 1 if meta.get("is_likely_target") else 0
+    if metric_kind(col) == "level":
+        score -= 3
+    return score
+
+
 def _detect_grouping_columns(df: pd.DataFrame, date_cols: list[str], numeric_cols: list[str]) -> list[str]:
     """Detect columns that are likely product/store/category groupers."""
     grouping = []
@@ -254,9 +331,13 @@ def _detect_grouping_columns(df: pd.DataFrame, date_cols: list[str], numeric_col
         if col in date_cols or col in numeric_cols:
             continue
         col_lower = col.lower().replace(" ", "_")
+        if pd.api.types.is_numeric_dtype(df[col]):
+            if _is_group_code(df[col], col):
+                grouping.append(col)
+            continue
         if any(kw in col_lower for kw in GROUPING_KEYWORDS):
             grouping.append(col)
-        elif df[col].dtype == object and df[col].nunique() < min(50, len(df) * 0.2):
+        elif _is_text(df[col]) and df[col].nunique() < min(50, len(df) * 0.2):
             # Low-cardinality string columns are likely categories
             grouping.append(col)
     return grouping
@@ -524,10 +605,13 @@ async def upload_csv(file: UploadFile = File(...)):
     exog_cols = _detect_exog_columns(df, date_col_names)
 
     # Suggest the best default date and target columns
-    suggested_date_col = date_col_names[0] if date_col_names else None
-    likely_targets = [c for c, m in numeric_col_map.items() if m["is_likely_target"]]
-    suggested_target_col = likely_targets[0] if likely_targets else (
-        numeric_col_names[0] if numeric_col_names else None
+    # Most distinct values wins: 'Date' over a 'Year' or 'Time' column.
+    suggested_date_col = (
+        max(date_col_names, key=lambda c: df[c].nunique()) if date_col_names else None
+    )
+    suggested_target_col = (
+        max(numeric_col_names, key=lambda c: _target_score(c, numeric_col_map[c]))
+        if numeric_col_names else None
     )
 
     # Infer frequency from the best date column

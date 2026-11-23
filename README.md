@@ -30,7 +30,7 @@ Version `0.2.0` · Capstone project, PES University (Dept. of CSE) · Functional
 - **15 models + a top-3 ensemble**, covering statistical, exponential-smoothing, decomposition, machine-learning, intermittent-demand and baseline methods ([full list](#models)).
 - **Fair model selection:** every model is refit from the same forecast origins and scored on the same unseen windows. They're ranked by **MASE**, where below 1.0 means the model beats a seasonal-naive forecast.
 - **Calibrated 95% ranges** built from each model's own backtest errors, clipped at zero for non-negative series.
-- **External drivers:** detected price and promotion columns are fed to XGBoost, Random Forest and SARIMAX.
+- **External drivers (opt-in):** detected price and promotion columns can be switched on for XGBoost, Random Forest and SARIMAX. They're off by default: future values have to be assumed, and in testing that made Walmart (fuel price) and Avocado (average price) forecasts worse.
 - **Holiday effects** for 15 countries (Prophet).
 - **Per-product forecasts:** forecast any single store, product or category from the breakdown table.
 
